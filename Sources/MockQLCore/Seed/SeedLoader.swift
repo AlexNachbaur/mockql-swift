@@ -15,8 +15,12 @@ struct SeedLoader {
     }
 
     /// Loads, validates, and coerces a seed source into store data.
-    static func load(_ source: SeedSource, schema: Schema) throws -> StoreData {
+    ///
+    /// Pass `initial` to layer this source over already-loaded data (the result-builder seeds
+    /// load on top of an external seed file this way); references may point into either layer.
+    static func load(_ source: SeedSource, schema: Schema, initial: StoreData = StoreData()) throws -> StoreData {
         var loader = SeedLoader(schema: schema, sourceName: source.sourceName)
+        loader.data = initial
         return try loader.run(document: try source.rawDocument())
     }
 

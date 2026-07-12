@@ -150,6 +150,12 @@ extension GraphQLValue {
     }
 }
 
+/// Returns `value` unless it is `.null`, in which case the fallback is returned — so handler
+/// code can write `input["quantity"] ?? 1` even though subscripts return a non-optional value.
+public func ?? (value: GraphQLValue, fallback: @autoclosure () -> GraphQLValue) -> GraphQLValue {
+    value.isNull ? fallback() : value
+}
+
 extension GraphQLValue: ExpressibleByNilLiteral {
     public init(nilLiteral: ()) {
         self = .null
