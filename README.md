@@ -299,8 +299,13 @@ Apple-only framework dependencies.
 |---|---|
 | macOS 14+ / iOS 17+ | Supported; built and tested in CI |
 | Linux | Supported; built and tested in CI |
-| Windows | Expected to work; CI verification planned |
-| Android | Expected to work; CI verification planned |
+| Android (API 28+) | Supported; built and tested in CI on an Android emulator |
+| Windows | Expected to work (core engine); CI verification planned |
+
+Android builds use the official [Swift SDK for Android](https://www.swift.org/documentation/articles/swift-sdk-for-android-getting-started.html)
+(Swift 6.3+ toolchain for cross-compilation; the package manifest itself stays at
+swift-tools-version 6.1). The full stack — including the SwiftNIO transport — runs on Android,
+not just the core engine.
 
 The Apple OS minimums exist only to satisfy Swift concurrency availability on Apple targets —
 they don't limit support elsewhere. MockQL is built with strict Swift concurrency: no
@@ -314,7 +319,6 @@ isn't available, such as Windows).
 ## TODO
 
 - [ ] Windows CI configuration and build scripts
-- [ ] Android CI configuration and build scripts
 - [ ] GraphQL introspection support (for GraphiQL and codegen tooling)
 - [ ] Recorded-response seeding: normalize a captured `{"data": …}` payload into records
 

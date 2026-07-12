@@ -30,7 +30,21 @@ jobs:
       - name: Test
         run: swift test
 
-  # TODO: Windows and Android CI configuration / build scripts (see README).
+  android:
+    name: Build & Test (Android)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and test on Android emulator
+        uses: skiptools/swift-android-action@v2
+        with:
+          # The official Swift SDK for Android starts at Swift 6.3; the package's
+          # swift-tools-version 6.1 manifest builds fine under the newer toolchain.
+          swift-version: '6.3'
+          android-api-level: 28
+          free-disk-space: true
+
+  # TODO: Windows CI configuration / build scripts (see README).
 
   lint:
     name: Lint

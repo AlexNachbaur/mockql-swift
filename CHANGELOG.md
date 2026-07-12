@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Android support**: the full package (engine and SwiftNIO transport) builds and tests on an
+  Android emulator in CI via the official Swift SDK for Android (Swift 6.3 toolchain, API 28).
+- Swift Package Index manifest (`.spi.yml`) declaring documentation targets.
+
 - **Full working server.** `MockQLServer.start(...)` binds an ephemeral localhost port and
   serves GraphQL over HTTP (`POST /graphql`, `GET /graphql?query=…`, `/health`) and
   subscriptions over the `graphql-transport-ws` WebSocket protocol.

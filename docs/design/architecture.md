@@ -43,7 +43,7 @@ Rules:
 
 | Decision | Choice | Why |
 |---|---|---|
-| Transport | SwiftNIO HTTP/1.1 + WebSocket | Industry standard, cross-platform (macOS/Linux) |
+| Transport | SwiftNIO HTTP/1.1 + WebSocket | Industry standard, cross-platform (macOS/Linux/Android) |
 | Subscriptions | `graphql-transport-ws` | What Apollo/urql/Relay speak natively |
 | YAML | Yams | Standard Swift YAML; hand-rolling YAML is a maintenance trap |
 | GraphQL parsing | Hand-written lexer/parser | Precise, friendly errors; no NIO leakage; portability |
