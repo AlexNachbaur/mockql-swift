@@ -107,8 +107,9 @@ Follow GraphQL spec semantics:
 ## Validation (fail fast)
 
 The entire document is validated against the schema at load time, before the server starts.
-Errors carry the seed's file/line (YAML) or JSON path, and include "did you mean" suggestions
-where a near-miss exists. At minimum, these are load-time errors:
+Errors carry the source name plus a document path (`data.User[0].email`) and include "did you
+mean" suggestions where a near-miss exists. (YAML line/column positions are a planned
+improvement over document paths.) At minimum, these are load-time errors:
 
 - unknown top-level key; missing/unsupported `version`
 - unknown type name under `data`; unknown field on a record; unknown root field

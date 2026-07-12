@@ -1,0 +1,42 @@
+type Query {
+    board: Board
+    assignees: [Assignee!]!
+    task(id: ID!): Task
+}
+
+type Mutation {
+    completeTask(taskId: ID!): Task!
+}
+
+interface Assignee {
+    id: ID!
+    displayName: String!
+}
+
+type Human implements Assignee {
+    id: ID!
+    displayName: String!
+    email: String!
+}
+
+type Bot implements Assignee {
+    id: ID!
+    displayName: String!
+    version: String!
+}
+
+type Board {
+    id: ID!
+    name: String!
+    tasks: [Task!]!
+}
+
+type Task {
+    id: ID!
+    title: String!
+    done: Boolean!
+    assignee: Assignee
+    dueAt: DateTime
+}
+
+scalar DateTime

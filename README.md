@@ -12,9 +12,10 @@ a real backend — one you fully control from Swift, with no fixtures folder ful
 files and no network flakiness. It was built for XCUITest automation, but the server is written
 in cross-platform Swift and runs anywhere a Swift toolchain does.
 
-> **Status: early development.** MockQL is being built in the open and does not yet have a stable
-> release. All code samples below are a **design preview** — they show the API MockQL is being
-> built toward, and may change before `1.0.0`. Follow the [CHANGELOG](CHANGELOG.md) for progress.
+> **Status: pre-1.0.** The full stack shown below — SDL and DSL schemas, YAML/JSON seeding,
+> stateful mutations, Relay connection synthesis, and `graphql-transport-ws` subscriptions — is
+> implemented and covered by unit and integration tests. The API may still evolve before
+> `1.0.0`; breaking changes are called out in the [CHANGELOG](CHANGELOG.md).
 
 ## Why MockQL?
 
@@ -26,8 +27,9 @@ MockQL takes a different approach:
 
 - **Bring your schema, or build one in Swift** — load your real GraphQL schema file (SDL), or
   declare one inline with an expressive `ResultBuilder` DSL.
-- **Pluggable data generation** — auto-generate realistic names, email addresses, phone numbers,
-  and other content instead of hardcoding `"Test User 1"` everywhere.
+- **Pluggable data generation** — auto-generate realistic names, email addresses, phone numbers
+  (formatted or strict E.164), UUIDs, timestamps, and other content instead of hardcoding
+  `"Test User 1"` everywhere. Generated values are deterministic and stable per record and field.
 - **Stateful by design** — MockQL maintains in-memory state, so a mutation performed in one step
   of a test is reflected in every query that follows. Responses stay consistent for the lifetime
   of the server.
@@ -247,14 +249,19 @@ func testAddingItemUpdatesCartBadge() async throws {
 
 ## Subscriptions
 
-Push subscription events from test code to exercise real-time UI:
+The server speaks the [`graphql-transport-ws`](https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md)
+protocol — what Apollo, urql, and Relay use — at `server.webSocketURL`. Push events from test
+code to exercise real-time UI:
 
 ```swift
 try await server.publish("orderStatusChanged", payload: [
-    "orderId": "order-1",
-    "status": "SHIPPED",
+    "id": "order-1",
+    "status": .enumValue("SHIPPED"),
 ])
 ```
+
+Payload fields you omit are filled by generators, and payloads may reference seeded records
+(`.reference("Order", id: "order-1")`).
 
 ## Installation
 
@@ -308,6 +315,8 @@ isn't available, such as Windows).
 
 - [ ] Windows CI configuration and build scripts
 - [ ] Android CI configuration and build scripts
+- [ ] GraphQL introspection support (for GraphiQL and codegen tooling)
+- [ ] Recorded-response seeding: normalize a captured `{"data": …}` payload into records
 
 ## Documentation
 

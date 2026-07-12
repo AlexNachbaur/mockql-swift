@@ -91,6 +91,20 @@ extension GraphQLValue {
         return nil
     }
 
+    /// Creates a reference from a dynamic id value, so handler code can write
+    /// `.reference("Product", id: input["productId"])` directly. String and integer ids are
+    /// accepted; anything else produces `.null`.
+    public static func reference(_ typeName: String, id: GraphQLValue) -> GraphQLValue {
+        switch id {
+        case .string(let value):
+            return .reference(typeName, id: value)
+        case .int(let value):
+            return .reference(typeName, id: String(value))
+        default:
+            return .null
+        }
+    }
+
     /// Accesses a field of an object value.
     ///
     /// Reading a missing field — or reading any field of a non-object — returns `.null`, so

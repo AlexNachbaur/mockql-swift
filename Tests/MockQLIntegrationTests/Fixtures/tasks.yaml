@@ -1,0 +1,16 @@
+version: 1
+
+data:
+  Human:
+    - { id: h1, displayName: Avery, email: avery@example.com }
+  Bot:
+    - { id: b1, displayName: Deploybot, version: "2.1" }
+  Task:
+    - { id: t1, title: Ship MockQL, done: false, assignee: Human:h1 }
+    - { id: t2, title: Nightly build, done: true, assignee: Bot:b1 }
+  Board:
+    - { id: board-1, name: Launch, tasks: [t1, t2] }
+
+roots:
+  board: board-1
+  assignees: [Human:h1, Bot:b1]

@@ -83,6 +83,22 @@ import Testing
     }
 }
 
+@Suite struct GraphQLValueReferenceTests {
+    @Test func referenceAccessorRoundTrips() {
+        let reference = GraphQLValue.reference("User", id: "u1")
+        #expect(reference.referenceValue?.typeName == "User")
+        #expect(reference.referenceValue?.id == "u1")
+        #expect(GraphQLValue.string("u1").referenceValue == nil)
+    }
+
+    @Test func dynamicIDOverloadAcceptsStringsAndInts() {
+        #expect(GraphQLValue.reference("User", id: .string("u1")) == .reference("User", id: "u1"))
+        #expect(GraphQLValue.reference("User", id: .int(7)) == .reference("User", id: "7"))
+        #expect(GraphQLValue.reference("User", id: .null) == .null)
+        #expect(GraphQLValue.reference("User", id: .bool(true)) == .null)
+    }
+}
+
 @Suite struct GraphQLValueCodableTests {
     @Test func jsonRoundTripPreservesValues() throws {
         let original: GraphQLValue = [
