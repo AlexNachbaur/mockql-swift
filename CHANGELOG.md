@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Android support**: the full package (engine and SwiftNIO transport) builds and tests on an
   Android emulator in CI via the official Swift SDK for Android (Swift 6.3 toolchain, API 28).
 - Swift Package Index manifest (`.spi.yml`) declaring documentation targets.
+- **AI-agent resources**: `AGENTS.md` for agents contributing to the repository, a
+  self-contained [integration guide](docs/agents/integration-guide.md) for agents adding MockQL
+  to other projects (canonical patterns, pitfalls, error→fix table), and an `llms.txt` index.
 - **DocC documentation**: catalogs for both modules with a getting-started guide, an XCUITest
   integration guide, a step-by-step tutorial, and topic guides for schemas, seeding, mutations
   and state, data generation, and subscriptions; doc comments across the public API; a CI job

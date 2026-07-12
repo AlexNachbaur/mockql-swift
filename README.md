@@ -336,6 +336,15 @@ swift package generate-documentation --target MockQL --target MockQLCore
 
 Architecture and design documents live in [docs/design/](docs/design/).
 
+### For AI coding agents
+
+If an AI agent is wiring MockQL into your test suite, point it at the
+[agent integration guide](docs/agents/integration-guide.md) — a self-contained document with
+the canonical test patterns, seed-format rules, known pitfalls, and an error→fix table. It's
+written to be pasted into a project's `AGENTS.md`/`CLAUDE.md` or referenced by URL, and
+[llms.txt](llms.txt) indexes it alongside the rest of the documentation. Agents contributing to
+MockQL itself should read [AGENTS.md](AGENTS.md).
+
 ## Contributing
 
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the development

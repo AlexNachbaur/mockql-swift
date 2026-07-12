@@ -1,0 +1,25 @@
+# MockQL
+
+> Stateful GraphQL mocking server in Swift for UI-test automation. Loads a real SDL schema or a
+> Swift result-builder declaration, seeds state from validated YAML/JSON, handles mutations with
+> Swift closures over transactional in-memory state, generates deterministic mock data for
+> unseeded fields, and serves HTTP plus graphql-transport-ws subscriptions on localhost.
+
+Swift 6.1+, SPM package with two libraries: `MockQL` (server) and `MockQLCore` (portable,
+NIO-free engine). Test-time tool only.
+
+## Integration
+
+- [AI agent integration guide](https://raw.githubusercontent.com/AlexNachbaur/mockql-swift/main/docs/agents/integration-guide.md): self-contained instructions, canonical patterns, pitfalls, and error→fix table
+- [README](https://raw.githubusercontent.com/AlexNachbaur/mockql-swift/main/README.md): overview, installation, examples
+
+## Reference
+
+- [Seed format specification](https://raw.githubusercontent.com/AlexNachbaur/mockql-swift/main/docs/design/seed-format.md): the version/data/roots document format and validation rules
+- [Architecture](https://raw.githubusercontent.com/AlexNachbaur/mockql-swift/main/docs/design/architecture.md): module layout and execution model
+- [API documentation](https://swiftpackageindex.com/AlexNachbaur/mockql-swift/documentation): DocC — guides for schemas, seeding, mutations, generators, subscriptions
+
+## Contributing
+
+- [AGENTS.md](https://raw.githubusercontent.com/AlexNachbaur/mockql-swift/main/AGENTS.md): instructions for agents working in the MockQL repository itself
+- [CONTRIBUTING](https://raw.githubusercontent.com/AlexNachbaur/mockql-swift/main/CONTRIBUTING.md): style rules and PR process
