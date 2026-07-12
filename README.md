@@ -324,7 +324,17 @@ isn't available, such as Windows).
 
 ## Documentation
 
-Architecture and design documents live in [docs/design/](docs/design/) as they are written.
+Full API documentation — including a getting-started guide, an XCUITest integration guide, a
+step-by-step tutorial, and deep dives on schemas, seeding, mutations, generators, and
+subscriptions — is written as DocC catalogs and hosted on the
+[Swift Package Index](https://swiftpackageindex.com/AlexNachbaur/mockql-swift/documentation).
+Build it locally with:
+
+```sh
+swift package generate-documentation --target MockQL --target MockQLCore
+```
+
+Architecture and design documents live in [docs/design/](docs/design/).
 
 ## Contributing
 

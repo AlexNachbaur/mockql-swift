@@ -15,10 +15,11 @@ public final class MockQLEngine: Sendable {
     /// Creates an engine.
     ///
     /// - Parameters:
-    ///   - schema: The SDL schema to serve. Omit it to define the schema entirely from the
-    ///     configuration block's `Query`/`Object`/`Mutation` declarations.
-    ///   - seed: Initial state, loaded and validated before the engine is ready.
-    ///   - generators: Generators keyed by `"Type.field"` for fields absent from seed data.
+    ///   - schemaSource: The SDL schema to serve. Omit it to define the schema entirely from
+    ///     the configuration block's `Query`/`Object`/`Mutation` declarations.
+    ///   - seedSource: Initial state, loaded and validated before the engine is ready.
+    ///   - generatorBindings: Generators keyed by `"Type.field"` for fields absent from seed
+    ///     data.
     ///   - serverSeed: Seed for deterministic data generation; equal seeds generate equal data.
     ///   - configuration: Declarations — mutation handlers, seeds, roots, generator bindings,
     ///     and (without an SDL schema) the schema shape itself.

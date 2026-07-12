@@ -9,6 +9,7 @@ public struct Schema: Sendable {
         public let type: TypeReference
         public let defaultValue: GraphQLValue?
 
+        /// Creates an argument definition.
         public init(name: String, type: TypeReference, defaultValue: GraphQLValue? = nil) {
             self.name = name
             self.type = type
@@ -22,6 +23,7 @@ public struct Schema: Sendable {
         public let type: TypeReference
         public let arguments: [Argument]
 
+        /// Creates a field definition.
         public init(name: String, type: TypeReference, arguments: [Argument] = []) {
             self.name = name
             self.type = type
@@ -41,6 +43,7 @@ public struct Schema: Sendable {
         public let fields: [Field]
         private let fieldIndex: [String: Int]
 
+        /// Creates an object type.
         public init(name: String, interfaces: [String] = [], fields: [Field]) {
             self.name = name
             self.interfaces = interfaces
@@ -62,6 +65,7 @@ public struct Schema: Sendable {
         public let name: String
         public let fields: [Field]
 
+        /// Creates an interface type.
         public init(name: String, fields: [Field]) {
             self.name = name
             self.fields = fields
@@ -73,6 +77,7 @@ public struct Schema: Sendable {
         public let name: String
         public let members: [String]
 
+        /// Creates a union type.
         public init(name: String, members: [String]) {
             self.name = name
             self.members = members
@@ -84,6 +89,7 @@ public struct Schema: Sendable {
         public let name: String
         public let values: [String]
 
+        /// Creates an enum type.
         public init(name: String, values: [String]) {
             self.name = name
             self.values = values
@@ -95,6 +101,7 @@ public struct Schema: Sendable {
         public let name: String
         public let fields: [Argument]
 
+        /// Creates an input object type.
         public init(name: String, fields: [Argument]) {
             self.name = name
             self.fields = fields
@@ -106,6 +113,7 @@ public struct Schema: Sendable {
         public let name: String
         public let isBuiltIn: Bool
 
+        /// Creates a scalar type.
         public init(name: String, isBuiltIn: Bool) {
             self.name = name
             self.isBuiltIn = isBuiltIn
