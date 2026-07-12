@@ -1,0 +1,80 @@
+type Query {
+    currentUser: User
+    cart: Cart
+    products(first: Int, after: String): ProductConnection!
+    product(id: ID!): Product
+}
+
+type Mutation {
+    addToCart(productId: ID!, quantity: Int = 1): Cart!
+    updateDisplayName(name: String!): User!
+}
+
+type Subscription {
+    orderStatusChanged: Order!
+}
+
+type User {
+    id: ID!
+    name: String!
+    email: String!
+    phone: String
+}
+
+type Product {
+    id: ID!
+    name: String!
+    priceCents: Int!
+    price: Money
+}
+
+type Money {
+    amountCents: Int!
+    currency: Currency!
+}
+
+enum Currency {
+    USD
+    EUR
+    GBP
+}
+
+type Cart {
+    id: ID!
+    owner: User!
+    items: [CartItem!]!
+}
+
+type CartItem {
+    id: ID!
+    product: Product!
+    quantity: Int!
+}
+
+type Order {
+    id: ID!
+    status: OrderStatus!
+}
+
+enum OrderStatus {
+    PENDING
+    SHIPPED
+    DELIVERED
+}
+
+type ProductConnection {
+    edges: [ProductEdge!]!
+    pageInfo: PageInfo!
+}
+
+type ProductEdge {
+    cursor: String!
+    node: Product!
+}
+
+type PageInfo {
+    hasNextPage: Boolean!
+    hasPreviousPage: Boolean!
+    startCursor: String
+    endCursor: String
+}
