@@ -1,11 +1,8 @@
 import Foundation
+import MockCoreTransport
 import MockQLCore
-import NIOCore
-import NIOHTTP1
-import NIOPosix
-import NIOWebSocket
 
-/// A running MockQL server: the engine plus an HTTP + WebSocket listener on localhost.
+/// A running MockQL server: the engine served over HTTP + WebSocket on localhost.
 ///
 /// ```swift
 /// let server = try await MockQLServer.start(
@@ -17,6 +14,10 @@ import NIOWebSocket
 ///
 /// app.launchEnvironment["GRAPHQL_URL"] = server.url.absoluteString
 /// ```
+///
+/// A `MockQLServer` is a single-service `MockHost`. To serve GraphQL alongside other protocol
+/// mocks (e.g. MockREST) on one port, register the ``engine`` on a shared `MockHost` instead —
+/// it conforms to `MockService`.
 public final class MockQLServer: Sendable {
     /// The engine serving this server's requests; use it for in-process execution or state
     /// inspection.
@@ -28,27 +29,23 @@ public final class MockQLServer: Sendable {
     /// The port the server is listening on.
     public let port: Int
 
-    private let channel: Channel
-    private let group: MultiThreadedEventLoopGroup
+    private let host: MockHost
 
-    private init(engine: MockQLEngine, channel: Channel, group: MultiThreadedEventLoopGroup, port: Int, host: String)
-        throws
-    {
+    private init(engine: MockQLEngine, host: MockHost, hostName: String) throws {
         self.engine = engine
-        self.channel = channel
-        self.group = group
-        self.port = port
+        self.host = host
+        self.port = host.port
         var components = URLComponents()
         components.scheme = "http"
-        components.host = host
-        components.port = port
+        components.host = hostName
+        components.port = host.port
         components.path = "/graphql"
         guard let httpURL = components.url else {
-            throw MockQLError(category: .configuration, message: "Cannot form server URL for host '\(host)'")
+            throw MockQLError(category: .configuration, message: "Cannot form server URL for host '\(hostName)'")
         }
         components.scheme = "ws"
         guard let wsURL = components.url else {
-            throw MockQLError(category: .configuration, message: "Cannot form WebSocket URL for host '\(host)'")
+            throw MockQLError(category: .configuration, message: "Cannot form WebSocket URL for host '\(hostName)'")
         }
         self.url = httpURL
         self.webSocketURL = wsURL
@@ -88,53 +85,8 @@ public final class MockQLServer: Sendable {
     public static func start(engine: MockQLEngine, host: String = "127.0.0.1", port: Int = 0) async throws
         -> MockQLServer
     {
-        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-        let upgrader = NIOWebSocketServerUpgrader(
-            maxFrameSize: 1 << 20,
-            shouldUpgrade: { channel, head in
-                guard head.uri.hasPrefix("/graphql") else {
-                    return channel.eventLoop.makeSucceededFuture(nil)
-                }
-                var headers = HTTPHeaders()
-                let requested = head.headers[canonicalForm: "Sec-WebSocket-Protocol"]
-                if requested.contains(where: { $0.lowercased().contains("graphql-transport-ws") }) {
-                    headers.add(name: "Sec-WebSocket-Protocol", value: "graphql-transport-ws")
-                }
-                return channel.eventLoop.makeSucceededFuture(headers)
-            },
-            upgradePipelineHandler: { channel, _ in
-                channel.pipeline.addHandler(GraphQLWSHandler(engine: engine))
-            }
-        )
-        let bootstrap = ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { channel in
-                let httpHandler = HTTPHandler(engine: engine)
-                return channel.pipeline.configureHTTPServerPipeline(
-                    withServerUpgrade: (
-                        upgraders: [upgrader],
-                        // Once the connection upgrades to WebSocket, the HTTP handler must
-                        // leave the pipeline or it would try to decode WebSocket frames.
-                        completionHandler: { _ in
-                            channel.pipeline.removeHandler(httpHandler, promise: nil)
-                        }
-                    )
-                ).flatMap {
-                    channel.pipeline.addHandler(httpHandler)
-                }
-            }
-        do {
-            let channel = try await bootstrap.bind(host: host, port: port).get()
-            guard let boundPort = channel.localAddress?.port else {
-                try await channel.close()
-                try await group.shutdownGracefully()
-                throw MockQLError(category: .configuration, message: "Server bound without a local address")
-            }
-            return try MockQLServer(engine: engine, channel: channel, group: group, port: boundPort, host: host)
-        } catch {
-            try? await group.shutdownGracefully()
-            throw error
-        }
+        let mockHost = try await MockHost.start(host: host, port: port, services: [engine])
+        return try MockQLServer(engine: engine, host: mockHost, hostName: host)
     }
 
     // MARK: - Test-facing conveniences
@@ -151,8 +103,6 @@ public final class MockQLServer: Sendable {
 
     /// Stops accepting connections, ends all subscription streams, and releases the port.
     public func stop() async throws {
-        await engine.shutdown()
-        try await channel.close()
-        try await group.shutdownGracefully()
+        try await host.stop()
     }
 }
