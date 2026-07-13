@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-12
+
 ### Added
 
 - **Android support**: the full package (engine and SwiftNIO transport) builds and tests on an
@@ -46,4 +48,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`MockQLCore` portable engine + `MockQL` SwiftNIO transport) with Yams and SwiftNIO
   dependencies declared.
 
-[Unreleased]: https://github.com/AlexNachbaur/mockql-swift/compare/main...HEAD
+[Unreleased]: https://github.com/AlexNachbaur/mockql-swift/compare/0.1.0...HEAD
+[0.1.0]: https://github.com/AlexNachbaur/mockql-swift/releases/tag/0.1.0
