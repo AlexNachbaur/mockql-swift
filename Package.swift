@@ -17,7 +17,9 @@ let package = Package(
         .library(name: "MockQLCore", targets: ["MockQLCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
+        // The MockCore platform: shared value model, state store, generators, seed primitives,
+        // diagnostics, and the MockHost/MockService transport.
+        .package(url: "https://github.com/AlexNachbaur/mockcore-swift.git", from: "0.1.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.70.0"),
         // Build-time only: enables `swift package generate-documentation` for the DocC catalogs.
         .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.0"),
@@ -26,16 +28,15 @@ let package = Package(
         .target(
             name: "MockQLCore",
             dependencies: [
-                .product(name: "Yams", package: "Yams")
+                .product(name: "MockCore", package: "mockcore-swift")
             ]
         ),
         .target(
             name: "MockQL",
             dependencies: [
                 "MockQLCore",
+                .product(name: "MockCoreTransport", package: "mockcore-swift"),
                 .product(name: "NIOCore", package: "swift-nio"),
-                .product(name: "NIOPosix", package: "swift-nio"),
-                .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
             ]
         ),
