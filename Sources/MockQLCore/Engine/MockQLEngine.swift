@@ -21,6 +21,8 @@ public final class MockQLEngine: Sendable {
     ///   - generatorBindings: Generators keyed by `"Type.field"` for fields absent from seed
     ///     data.
     ///   - serverSeed: Seed for deterministic data generation; equal seeds generate equal data.
+    ///   - store: The state store to use — pass a sibling service's store (e.g. MockREST's) to
+    ///     share state across protocols on one `MockHost`. Omit for a store of its own.
     ///   - configuration: Declarations — mutation handlers, seeds, roots, generator bindings,
     ///     and (without an SDL schema) the schema shape itself.
     public init(
@@ -28,6 +30,7 @@ public final class MockQLEngine: Sendable {
         seed seedSource: SeedSource? = nil,
         generators generatorBindings: [String: FieldGenerator] = [:],
         serverSeed: UInt64 = 0,
+        store: StateStore? = nil,
         @MockQLBuilder configuration: () -> [any MockQLDeclaration] = { [] }
     ) async throws {
         let baseSchema = try schemaSource?.loadSchema()
@@ -57,9 +60,15 @@ public final class MockQLEngine: Sendable {
         if let dslSeeds = assembled.seedDocument {
             data = try SeedLoader.load(.document(dslSeeds), schema: assembled.schema, initial: data)
         }
-        let store = StateStore()
-        await store.load(data)
-        self.store = store
+        if let shared = store {
+            // A shared store may already hold a sibling service's seed; merge, don't replace.
+            await shared.merge(data)
+            self.store = shared
+        } else {
+            let own = StateStore()
+            await own.load(data)
+            self.store = own
+        }
     }
 
     // MARK: - Execution
