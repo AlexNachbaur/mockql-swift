@@ -41,7 +41,9 @@ extension MockQLEngine: MockService {
     }
 
     public func webSocketUpgrade(for request: MockRequest) -> MockWebSocketUpgrade? {
-        guard request.path.hasPrefix("/graphql") else { return nil }
+        // Exact match: the host consults this hook independently of claims(_:), so a prefix
+        // match would let MockQL preempt sibling services on paths like /graphqlx.
+        guard request.path == "/graphql" else { return nil }
         return MockWebSocketUpgrade(subprotocol: "graphql-transport-ws") {
             GraphQLWSHandler(engine: self)
         }

@@ -14,8 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The public API is unchanged: `GraphQLValue` and `MockQLError` are typealiases of MockCore's
   `MockValue` and `MockError`, every previously-public symbol is re-exported, and the full test
   suite passes without modification.
-- `MockQLServer` is now a single-service `MockCoreTransport.MockHost` internally; HTTP behavior
-  (`POST`/`GET /graphql`, `/health`, error shapes) is unchanged.
+- `MockQLServer` is now a single-service `MockCoreTransport.MockHost` internally. Behavior for
+  `POST`/`GET /graphql` (including GraphQL error envelopes) and `/health` is unchanged; requests
+  to paths no service claims now receive the host's diagnostic 404 body
+  (`{"error": "No registered mock service claims …"}`) instead of the previous GraphQL-style
+  `{"errors": […]}` envelope. The status code is still 404.
+- The Yams dependency moved to MockCore along with YAML seed decoding; MockQL no longer depends
+  on it directly.
 
 ### Added
 
