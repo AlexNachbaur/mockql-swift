@@ -458,6 +458,36 @@ private func makeShopEngine(
     }
 }
 
+@Suite struct EngineSharedStoreTests {
+    @Test func injectedStoreMergesSeedInsteadOfReplacing() async throws {
+        // A sibling service (e.g. MockREST) already put state in the shared store.
+        let store = StateStore()
+        await store.withMutationState { state in
+            state.insert("Product", ["id": "existing-1", "name": "Pre-seeded", "priceCents": 100])
+        }
+
+        let engine = try await MockQLEngine(schema: .sdl(shopSDL), seed: .yaml(shopSeed), store: store)
+
+        // The engine adopted the shared store rather than making its own…
+        #expect(engine.store === store)
+        // …its own seed merged in…
+        #expect(await store.record(type: "User", id: "user-1") != nil)
+        // …and the sibling's pre-existing record survived the merge.
+        let existing = await store.record(type: "Product", id: "existing-1")
+        #expect(existing?["name"] == .string("Pre-seeded"))
+
+        // Queries resolve records regardless of which service seeded them.
+        let response = await engine.execute(GraphQLRequest(query: #"{ product(id: "existing-1") { name } }"#))
+        #expect(response.data?["product"]["name"] == .string("Pre-seeded"))
+    }
+
+    @Test func omittingTheStoreParameterKeepsAPrivateStore() async throws {
+        let first = try await MockQLEngine(schema: .sdl(shopSDL), seed: .yaml(shopSeed))
+        let second = try await MockQLEngine(schema: .sdl(shopSDL), seed: .yaml(shopSeed))
+        #expect(first.store !== second.store)
+    }
+}
+
 @Suite struct RequestDecodingTests {
     @Test func decodesStandardJSONBody() throws {
         let body = #"{"query": "{ a }", "operationName": "Op", "variables": {"x": 1}}"#

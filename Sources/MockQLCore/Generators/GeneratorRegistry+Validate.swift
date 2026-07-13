@@ -1,3 +1,5 @@
+import MockCore
+
 extension GeneratorRegistry {
     /// Validates that every binding refers to a real `Type.field` in the schema.
     ///
