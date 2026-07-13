@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MockQL is now built on the MockCore platform** (`mockcore-swift`), the shared foundation
+  extracted from this package so REST and GraphQL mocks can serve one port and one state store.
+  The public API is unchanged: `GraphQLValue` and `MockQLError` are typealiases of MockCore's
+  `MockValue` and `MockError`, every previously-public symbol is re-exported, and the full test
+  suite passes without modification.
+- `MockQLServer` is now a single-service `MockCoreTransport.MockHost` internally; HTTP behavior
+  (`POST`/`GET /graphql`, `/health`, error shapes) is unchanged.
+
+### Added
+
+- `MockQLEngine` conforms to `MockCoreTransport.MockService`, so a GraphQL mock can be
+  registered on a shared `MockHost` alongside sibling protocol mocks (e.g. MockREST) and answer
+  on the same port, sharing one `StateStore`.
+
 ## [0.1.0] - 2026-07-12
 
 ### Added
