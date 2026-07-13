@@ -17,6 +17,9 @@ let package = Package(
         .library(name: "MockQLCore", targets: ["MockQLCore"]),
     ],
     dependencies: [
+        // Local path dependency during the MockCore extraction (extraction-plan.md Phase 0);
+        // switches to the tagged github.com/AlexNachbaur/mockcore-swift release in Phase 3.
+        .package(path: "../mockcore"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.70.0"),
         // Build-time only: enables `swift package generate-documentation` for the DocC catalogs.
@@ -26,7 +29,8 @@ let package = Package(
         .target(
             name: "MockQLCore",
             dependencies: [
-                .product(name: "Yams", package: "Yams")
+                .product(name: "MockCore", package: "mockcore"),
+                .product(name: "Yams", package: "Yams"),
             ]
         ),
         .target(
