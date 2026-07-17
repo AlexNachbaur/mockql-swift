@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-17
+
 ### Changed
 
 - **MockQL is now built on the MockCore platform** (`mockcore-swift`), the shared foundation
@@ -69,5 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`MockQLCore` portable engine + `MockQL` SwiftNIO transport) with Yams and SwiftNIO
   dependencies declared.
 
-[Unreleased]: https://github.com/AlexNachbaur/mockql-swift/compare/0.1.0...HEAD
+[Unreleased]: https://github.com/AlexNachbaur/mockql-swift/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/AlexNachbaur/mockql-swift/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/AlexNachbaur/mockql-swift/releases/tag/0.1.0
