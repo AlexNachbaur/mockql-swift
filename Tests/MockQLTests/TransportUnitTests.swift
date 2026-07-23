@@ -64,3 +64,46 @@ import Testing
         }
     }
 }
+
+@Suite struct ConfigurableTransportPathTests {
+    @Test func facadeReflectsCustomSubscriptionPath() async throws {
+        let server = try await MockQLServer.start(subscriptionPath: "/realtime/connect") {
+            Query("greeting", .constant(.string("hi")))
+        }
+        // GraphQL over HTTP stays on /graphql; only the WebSocket URL moves.
+        #expect(server.url.absoluteString == "http://127.0.0.1:\(server.port)/graphql")
+        #expect(server.webSocketURL.absoluteString == "ws://127.0.0.1:\(server.port)/realtime/connect")
+        try await server.stop()
+    }
+
+    @Test func serviceRoutesHTTPAndWebSocketOnConfiguredPaths() async throws {
+        let server = try await MockQLServer.start {
+            Query("greeting", .constant(.string("hi")))
+        }
+        let service = server.engine.service(subscriptionPath: "/realtime/connect")
+
+        // Queries/mutations remain on /graphql.
+        #expect(service.claims(MockRequest(method: "POST", uri: "/graphql")))
+        #expect(!service.claims(MockRequest(method: "POST", uri: "/realtime/connect")))
+
+        // The graphql-transport-ws upgrade answers on the configured subscription path only.
+        #expect(service.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/realtime/connect")) != nil)
+        #expect(service.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/graphql")) == nil)
+
+        try await server.stop()
+    }
+
+    @Test func defaultsServeBothOnGraphQL() async throws {
+        let server = try await MockQLServer.start {
+            Query("greeting", .constant(.string("hi")))
+        }
+        // Default engine-as-service and the explicit default service both serve the WS on /graphql.
+        #expect(server.engine.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/graphql")) != nil)
+        #expect(server.engine.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/realtime/connect")) == nil)
+        let service = server.engine.service()
+        #expect(service.claims(MockRequest(method: "POST", uri: "/graphql")))
+        #expect(service.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/graphql")) != nil)
+
+        try await server.stop()
+    }
+}

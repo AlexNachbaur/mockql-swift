@@ -155,6 +155,44 @@ import Testing
             client.close()
             try await server.stop()
         }
+
+        @Test func subscriptionsFlowOverACustomSubscriptionPath() async throws {
+            // Mirror a server that serves queries/mutations on /graphql but subscriptions on a
+            // dedicated realtime path — the client should reach both without special-casing.
+            let server = try await MockQLServer.start(
+                schema: .file(try fixturePath("shop", extension: "graphqls")),
+                seed: .file(try fixturePath("checkout", extension: "yaml")),
+                subscriptionPath: "/realtime/connect"
+            )
+            #expect(server.url.path == "/graphql")
+            #expect(server.webSocketURL.path == "/realtime/connect")
+
+            let client = GraphQLWSClient(url: server.webSocketURL)
+            try await client.send(["type": "connection_init"])
+            _ = try await withTimeout { try await client.receive(type: "connection_ack") }
+            try await client.send([
+                "type": "subscribe",
+                "id": "sub-1",
+                "payload": ["query": "subscription { orderStatusChanged { id status } }"],
+            ])
+            try await withTimeout {
+                while await server.engine.activeSubscriptionCount() == 0 {
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+            }
+
+            try await server.publish(
+                "orderStatusChanged",
+                payload: ["id": "order-1", "status": .enumValue("SHIPPED")]
+            )
+
+            let event = try await withTimeout { try await client.receive(type: "next") }
+            #expect(event["id"] == .string("sub-1"))
+            #expect(event["payload"]["data"]["orderStatusChanged"]["id"] == .string("order-1"))
+
+            client.close()
+            try await server.stop()
+        }
     }
 
 #endif
