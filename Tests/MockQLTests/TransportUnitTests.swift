@@ -64,3 +64,72 @@ import Testing
         }
     }
 }
+
+@Suite struct ConfigurableTransportPathTests {
+    @Test func facadeReflectsCustomSubscriptionPath() async throws {
+        let server = try await MockQLServer.start(subscriptionPath: "/realtime/connect") {
+            Query("greeting", .constant(.string("hi")))
+        }
+        // GraphQL over HTTP stays on /graphql; only the WebSocket URL moves.
+        #expect(server.url.absoluteString == "http://127.0.0.1:\(server.port)/graphql")
+        #expect(server.webSocketURL.absoluteString == "ws://127.0.0.1:\(server.port)/realtime/connect")
+        try await server.stop()
+    }
+
+    @Test func serviceRoutesHTTPAndWebSocketOnConfiguredPaths() async throws {
+        let server = try await MockQLServer.start {
+            Query("greeting", .constant(.string("hi")))
+        }
+        let service = server.engine.service(subscriptionPath: "/realtime/connect")
+
+        // Queries/mutations remain on /graphql.
+        #expect(service.claims(MockRequest(method: "POST", uri: "/graphql")))
+        #expect(!service.claims(MockRequest(method: "POST", uri: "/realtime/connect")))
+
+        // The graphql-transport-ws upgrade answers on the configured subscription path only.
+        #expect(service.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/realtime/connect")) != nil)
+        #expect(service.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/graphql")) == nil)
+
+        try await server.stop()
+    }
+
+    @Test func defaultsServeBothOnGraphQL() async throws {
+        let server = try await MockQLServer.start {
+            Query("greeting", .constant(.string("hi")))
+        }
+        // Default engine-as-service and the explicit default service both serve the WS on /graphql.
+        #expect(server.engine.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/graphql")) != nil)
+        #expect(server.engine.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/realtime/connect")) == nil)
+        let service = server.engine.service()
+        #expect(service.claims(MockRequest(method: "POST", uri: "/graphql")))
+        #expect(service.webSocketUpgrade(for: MockRequest(method: "GET", uri: "/graphql")) != nil)
+
+        try await server.stop()
+    }
+
+    @Test func customHTTPPathMovesClaimsOffGraphQL() async throws {
+        let server = try await MockQLServer.start {
+            Query("greeting", .constant(.string("hi")))
+        }
+        let service = server.engine.service(httpPath: "/gql")
+        #expect(service.claims(MockRequest(method: "POST", uri: "/gql")))
+        #expect(!service.claims(MockRequest(method: "POST", uri: "/graphql")))
+        try await server.stop()
+    }
+
+    @Test func pathsWithoutLeadingSlashAreNormalized() async throws {
+        // Bare segments route and produce well-formed URLs identically to rooted paths.
+        let server = try await MockQLServer.start(httpPath: "gql", subscriptionPath: "realtime") {
+            Query("greeting", .constant(.string("hi")))
+        }
+        #expect(server.url.path == "/gql")
+        #expect(server.webSocketURL.path == "/realtime")
+
+        let service = server.engine.service(httpPath: "gql", subscriptionPath: "realtime")
+        #expect(service.httpPath == "/gql")
+        #expect(service.subscriptionPath == "/realtime")
+        #expect(service.claims(MockRequest(method: "POST", uri: "/gql")))
+
+        try await server.stop()
+    }
+}

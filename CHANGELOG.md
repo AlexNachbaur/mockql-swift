@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-23
+
+### Added
+
+- **Configurable transport paths for GraphQL over HTTP and the subscription WebSocket.** A new
+  `MockQLService` value serves a `MockQLEngine` with independently-configurable `httpPath` and
+  `subscriptionPath` (both defaulting to `/graphql`), plus a
+  `MockQLEngine.service(httpPath:subscriptionPath:)` convenience for mounting on a shared
+  `MockHost`. `MockQLServer.start(…)` gains matching `httpPath`/`subscriptionPath` parameters and
+  reflects them in `url` / `webSocketURL`. This lets the mock mirror a server that splits the two
+  — e.g. queries/mutations on `/graphql` and `graphql-transport-ws` subscriptions on a dedicated
+  realtime path such as `/realtime/connect` — so a client configured for the real server talks to
+  the mock without special-casing it. A bare `MockQLEngine` still conforms to `MockService` on
+  `/graphql` for both, so existing code is unchanged.
+
 ## [0.2.0] - 2026-07-17
 
 ### Changed
