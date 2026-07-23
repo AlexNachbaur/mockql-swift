@@ -22,9 +22,11 @@ public final class MockQLServer: Sendable {
     /// The engine serving this server's requests; use it for in-process execution or state
     /// inspection.
     public let engine: MockQLEngine
-    /// The HTTP endpoint (`http://127.0.0.1:<port>/graphql`).
+    /// The GraphQL-over-HTTP endpoint, on the server's `httpPath` (default `/graphql`) —
+    /// e.g. `http://127.0.0.1:<port>/graphql`.
     public let url: URL
-    /// The `graphql-transport-ws` WebSocket endpoint (`ws://127.0.0.1:<port>/graphql`).
+    /// The `graphql-transport-ws` WebSocket endpoint, on the server's `subscriptionPath`
+    /// (default `/graphql`) — e.g. `ws://127.0.0.1:<port>/graphql`.
     public let webSocketURL: URL
     /// The port the server is listening on.
     public let port: Int
@@ -111,17 +113,16 @@ public final class MockQLServer: Sendable {
         httpPath: String = "/graphql",
         subscriptionPath: String = "/graphql"
     ) async throws -> MockQLServer {
-        let mockHost = try await MockHost.start(
-            host: host,
-            port: port,
-            services: [engine.service(httpPath: httpPath, subscriptionPath: subscriptionPath)]
-        )
+        // Build the service once and reuse its normalized paths for both routing and the advertised
+        // URLs, so a caller who omits a leading "/" gets consistent, well-formed results.
+        let service = engine.service(httpPath: httpPath, subscriptionPath: subscriptionPath)
+        let mockHost = try await MockHost.start(host: host, port: port, services: [service])
         return try MockQLServer(
             engine: engine,
             host: mockHost,
             hostName: host,
-            httpPath: httpPath,
-            subscriptionPath: subscriptionPath
+            httpPath: service.httpPath,
+            subscriptionPath: service.subscriptionPath
         )
     }
 

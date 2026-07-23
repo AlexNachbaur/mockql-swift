@@ -106,4 +106,30 @@ import Testing
 
         try await server.stop()
     }
+
+    @Test func customHTTPPathMovesClaimsOffGraphQL() async throws {
+        let server = try await MockQLServer.start {
+            Query("greeting", .constant(.string("hi")))
+        }
+        let service = server.engine.service(httpPath: "/gql")
+        #expect(service.claims(MockRequest(method: "POST", uri: "/gql")))
+        #expect(!service.claims(MockRequest(method: "POST", uri: "/graphql")))
+        try await server.stop()
+    }
+
+    @Test func pathsWithoutLeadingSlashAreNormalized() async throws {
+        // Bare segments route and produce well-formed URLs identically to rooted paths.
+        let server = try await MockQLServer.start(httpPath: "gql", subscriptionPath: "realtime") {
+            Query("greeting", .constant(.string("hi")))
+        }
+        #expect(server.url.path == "/gql")
+        #expect(server.webSocketURL.path == "/realtime")
+
+        let service = server.engine.service(httpPath: "gql", subscriptionPath: "realtime")
+        #expect(service.httpPath == "/gql")
+        #expect(service.subscriptionPath == "/realtime")
+        #expect(service.claims(MockRequest(method: "POST", uri: "/gql")))
+
+        try await server.stop()
+    }
 }

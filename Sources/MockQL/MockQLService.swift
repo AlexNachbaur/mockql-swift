@@ -26,11 +26,18 @@ public struct MockQLService: MockService {
     public let subscriptionPath: String
 
     /// Creates a service for `engine`. Both paths default to `/graphql`; override
-    /// `subscriptionPath` (and/or `httpPath`) to match a server that separates them.
+    /// `subscriptionPath` (and/or `httpPath`) to match a server that separates them. Paths are
+    /// normalized to a leading `/`, so `"graphql"` and `"/graphql"` are equivalent.
     public init(engine: MockQLEngine, httpPath: String = "/graphql", subscriptionPath: String = "/graphql") {
         self.engine = engine
-        self.httpPath = httpPath
-        self.subscriptionPath = subscriptionPath
+        self.httpPath = Self.normalizedPath(httpPath)
+        self.subscriptionPath = Self.normalizedPath(subscriptionPath)
+    }
+
+    /// Ensures a route path begins with `/`, since `MockRequest.path` always does — so a caller
+    /// may pass a bare segment (`"graphql"`) or a rooted path (`"/graphql"`) interchangeably.
+    static func normalizedPath(_ path: String) -> String {
+        path.hasPrefix("/") ? path : "/" + path
     }
 
     public var name: String { "MockQL" }
