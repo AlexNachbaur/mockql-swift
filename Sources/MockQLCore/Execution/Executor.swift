@@ -564,10 +564,11 @@ struct Executor {
             }
         }
         guard let argumentFields = arguments.objectValue else { return nodes }
-        let fieldFilters = argumentFields.filter { name, value in
-            value != .null
-                && !Self.paginationArguments.contains(name)
-                && isScalarField(name, onType: nodeTypeName)
+        // An omitted argument is absent from the coerced arguments; an explicit `field: null` is
+        // present as `.null`. So a present null is a real equality filter (match null-valued nodes)
+        // and needs no special-casing here.
+        let fieldFilters = argumentFields.filter { name, _ in
+            !Self.paginationArguments.contains(name) && isScalarField(name, onType: nodeTypeName)
         }
         guard !fieldFilters.isEmpty else { return nodes }
         return nodes.filter { node in

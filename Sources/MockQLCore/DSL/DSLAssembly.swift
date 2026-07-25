@@ -79,7 +79,7 @@ struct DSLAssembly {
             guard resolvers[resolve.key] == nil else {
                 throw MockQLError(
                     category: .configuration,
-                    message: "Resolver for '\(resolve.key)' is declared more than once"
+                    message: "Resolve for '\(resolve.key)' is declared more than once"
                 )
             }
             guard filters[resolve.key] == nil else {
@@ -89,7 +89,7 @@ struct DSLAssembly {
                         + "produces the field value, so its Filter would never run — keep one"
                 )
             }
-            try validateFieldKey(resolve.key, kind: "Resolver", requiringListOrConnection: false, schema: schema)
+            try validateFieldKey(resolve.key, kind: "Resolve", requiringListOrConnection: false, schema: schema)
             resolvers[resolve.key] = resolve.resolver
         }
         return Output(

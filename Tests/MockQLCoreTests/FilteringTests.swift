@@ -8,7 +8,7 @@ import Testing
 private let filterSDL = """
     type Query {
         comments(postId: ID, first: Int, after: String): CommentConnection!
-        tags(kind: String): [Tag!]!
+        tags(kind: String, group: String): [Tag!]!
         products(maxPrice: Float): [Product!]!
         search(term: String!): [Article!]!
         feed(kind: String): [FeedItem!]!
@@ -19,7 +19,7 @@ private let filterSDL = """
     type CommentEdge { cursor: String! node: Comment! }
     type PageInfo { hasNextPage: Boolean! hasPreviousPage: Boolean! startCursor: String endCursor: String }
     type Comment { id: ID! postId: ID! body: String! }
-    type Tag { id: ID! kind: String! label: String! }
+    type Tag { id: ID! kind: String! label: String! group: String }
     type Product { id: ID! name: String! price: Float! }
     type Article { id: ID! title: String! }
     interface FeedItem { id: ID! kind: String! }
@@ -35,9 +35,9 @@ private let filterSeed = """
         - { id: c2, postId: p1, body: two }
         - { id: c3, postId: p2, body: three }
       Tag:
-        - { id: t1, kind: color, label: red }
-        - { id: t2, kind: color, label: blue }
-        - { id: t3, kind: size, label: large }
+        - { id: t1, kind: color, label: red, group: null }
+        - { id: t2, kind: color, label: blue, group: archive }
+        - { id: t3, kind: size, label: large, group: null }
       Product:
         - { id: pr1, name: Cheap, price: 5.0 }
         - { id: pr2, name: Mid, price: 20.0 }
@@ -85,6 +85,21 @@ private func ids(_ list: GraphQLValue) -> [String] {
         let response = await engine.execute(GraphQLRequest(query: #"{ tags(kind: "color") { id } }"#))
         #expect(response.errors.isEmpty)
         #expect(ids(response.data?["tags"] ?? .null) == ["t1", "t2"])
+    }
+
+    @Test func explicitNullArgumentFiltersToNullValuedNodes() async throws {
+        // An explicit `group: null` is a real equality filter — it matches nodes whose `group` is
+        // null (t1, t3), unlike an omitted argument which doesn't filter at all.
+        let engine = try await makeEngine()
+        let explicit = await engine.execute(GraphQLRequest(query: "{ tags(group: null) { id } }"))
+        #expect(explicit.errors.isEmpty)
+        #expect(ids(explicit.data?["tags"] ?? .null) == ["t1", "t3"])
+        // A non-null value still filters by equality.
+        let archived = await engine.execute(GraphQLRequest(query: #"{ tags(group: "archive") { id } }"#))
+        #expect(ids(archived.data?["tags"] ?? .null) == ["t2"])
+        // Omitting the argument returns everything.
+        let all = await engine.execute(GraphQLRequest(query: "{ tags { id } }"))
+        #expect(ids(all.data?["tags"] ?? .null) == ["t1", "t2", "t3"])
     }
 
     @Test func interfaceElementListIsFilteredByInterfaceScalarField() async throws {
