@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no configuration. Pagination arguments (`first`/`last`/`before`/`after`) and arguments that don't
   name a scalar node field are ignored; filtering runs before connection pagination and applies to
   plain object lists as well. Node references are dereferenced against the store to read field
-  values. See <doc:FilteringAndResolving>.
+  values. See the [Filtering and Resolving](Sources/MockQLCore/MockQLCore.docc/FilteringAndResolving.md)
+  guide.
 - **`Filter` declaration** — register a custom predicate `(node, arguments) -> Bool` for a
   `"Type.field"`, overriding the argument-name convention for a field whose arguments don't map to
   node fields by equality (ranges, substrings, computed matches).
