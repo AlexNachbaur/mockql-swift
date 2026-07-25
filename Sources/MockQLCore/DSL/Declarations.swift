@@ -9,8 +9,8 @@ public typealias MutationHandler =
 /// A declaration accepted by the MockQL configuration builder.
 ///
 /// Conforming types are the DSL vocabulary: ``Query``, ``Mutation``, ``Subscription``,
-/// ``Object``, ``Seed``, ``Root``, and ``Generate``. The protocol exists for the result
-/// builder's typing; MockQL only understands its own declaration types.
+/// ``Object``, ``Seed``, ``Root``, ``Generate``, ``Filter``, and ``Resolve``. The protocol exists
+/// for the result builder's typing; MockQL only understands its own declaration types.
 public protocol MockQLDeclaration: Sendable {}
 
 /// Declares a root query field.
@@ -61,6 +61,83 @@ public struct Mutation: MockQLDeclaration {
         self.name = name
         self.returning = returning
         self.handler = handler
+    }
+}
+
+/// A read-only view of server state passed to a ``Resolve`` field resolver. Exposes the stored
+/// records so a resolver can select, filter, or join them when producing a field's value.
+public struct StoreView: Sendable {
+    let data: StoreData
+
+    init(_ data: StoreData) {
+        self.data = data
+    }
+
+    /// All stored records of the given object type, in insertion order.
+    public func records(of type: String) -> [MockValue] { data.allRecords(type: type) }
+
+    /// The stored record of `type` with the given `id`, or `nil` if none exists.
+    public func record(type: String, id: String) -> MockValue? { data.record(type: type, id: id) }
+}
+
+/// A field filter predicate: given a candidate node's stored fields and the field's coerced
+/// arguments, returns whether the node belongs in the result. Registered via ``Filter``.
+public typealias FieldFilter =
+    @Sendable (_ node: GraphQLValue, _ arguments: GraphQLValue) -> Bool
+
+/// Registers a custom filter for a list- or connection-typed field, keyed `"Type.field"`.
+///
+/// By default MockQL filters a field's seeded nodes by any argument whose name matches a scalar
+/// field on the node type (e.g. `comments(postId:)` keeps `Comment`s whose `postId` equals the
+/// argument). Declare a `Filter` to override that convention for a field whose arguments don't map
+/// to node fields by equality — a range, a substring, or a computed match:
+///
+/// ```swift
+/// Filter("Query.products") { node, args in
+///     (node["price"].doubleValue ?? 0) <= (args["maxPrice"].doubleValue ?? .infinity)
+/// }
+/// ```
+///
+/// The predicate runs against each candidate node (references are dereferenced to their stored
+/// record) before pagination arguments (`first`/`after`/…) are applied.
+public struct Filter: MockQLDeclaration {
+    let key: String
+    let predicate: FieldFilter
+
+    /// Declares a filter for the `"Type.field"` connection/list field.
+    public init(_ key: String, _ predicate: @escaping FieldFilter) {
+        self.key = key
+        self.predicate = predicate
+    }
+}
+
+/// A field resolver: given the field's coerced arguments and a read-only ``StoreView``, returns
+/// the value the field resolves to. Registered via ``Resolve``.
+public typealias FieldResolver =
+    @Sendable (_ arguments: GraphQLValue, _ store: StoreView) -> GraphQLValue
+
+/// Registers a custom resolver for a field, keyed `"Type.field"`, bypassing seeded-node lookup.
+///
+/// Use when a field's value can't be expressed as "the seeded nodes, filtered" — e.g. search,
+/// aggregation, or cross-type joins. Return a list of node references to have MockQL synthesize
+/// the connection (edges/pageInfo, honoring pagination arguments), or a fully-formed value:
+///
+/// ```swift
+/// Resolve("Query.search") { args, store in
+///     let term = args["term"].stringValue ?? ""
+///     return .list(store.records(of: "Article")
+///         .filter { $0["title"].stringValue?.localizedCaseInsensitiveContains(term) == true }
+///         .map { .reference("Article", id: $0["id"]) })
+/// }
+/// ```
+public struct Resolve: MockQLDeclaration {
+    let key: String
+    let resolver: FieldResolver
+
+    /// Declares a resolver for the `"Type.field"` field.
+    public init(_ key: String, _ resolver: @escaping FieldResolver) {
+        self.key = key
+        self.resolver = resolver
     }
 }
 

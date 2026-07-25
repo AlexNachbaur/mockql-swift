@@ -17,6 +17,8 @@ struct DSLAssembly {
         var schema: Schema
         var handlers: [String: MutationHandler]
         var generatorBindings: [String: FieldGenerator]
+        var filters: [String: FieldFilter]
+        var resolvers: [String: FieldResolver]
         var seedDocument: GraphQLValue?
     }
 
@@ -27,6 +29,8 @@ struct DSLAssembly {
     private var seeds: [Seed] = []
     private var roots: [Root] = []
     private var generates: [Generate] = []
+    private var filters: [Filter] = []
+    private var resolves: [Resolve] = []
 
     static func assemble(_ declarations: [any MockQLDeclaration], baseSchema: Schema?) throws -> Output {
         var assembly = DSLAssembly()
@@ -59,10 +63,39 @@ struct DSLAssembly {
             }
             handlers[mutation.name] = mutation.handler
         }
+        var filters: [String: FieldFilter] = [:]
+        for filter in assembly.filters {
+            guard filters[filter.key] == nil else {
+                throw MockQLError(
+                    category: .configuration,
+                    message: "Filter for '\(filter.key)' is declared more than once"
+                )
+            }
+            filters[filter.key] = filter.predicate
+        }
+        var resolvers: [String: FieldResolver] = [:]
+        for resolve in assembly.resolves {
+            guard resolvers[resolve.key] == nil else {
+                throw MockQLError(
+                    category: .configuration,
+                    message: "Resolver for '\(resolve.key)' is declared more than once"
+                )
+            }
+            guard filters[resolve.key] == nil else {
+                throw MockQLError(
+                    category: .configuration,
+                    message: "Field '\(resolve.key)' has both a Resolve and a Filter; a resolver fully "
+                        + "produces the field value, so its Filter would never run — keep one"
+                )
+            }
+            resolvers[resolve.key] = resolve.resolver
+        }
         return Output(
             schema: schema,
             handlers: handlers,
             generatorBindings: bindings,
+            filters: filters,
+            resolvers: resolvers,
             seedDocument: assembly.seedDocument()
         )
     }
@@ -79,6 +112,8 @@ struct DSLAssembly {
             case let seed as Seed: seeds.append(seed)
             case let root as Root: roots.append(root)
             case let generate as Generate: generates.append(generate)
+            case let filter as Filter: filters.append(filter)
+            case let resolve as Resolve: resolves.append(resolve)
             default:
                 throw MockQLError(
                     category: .configuration,

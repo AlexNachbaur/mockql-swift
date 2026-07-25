@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-25
+
+### Added
+
+- **Argument-based filtering for list and connection fields.** A list- or connection-typed field's
+  seeded nodes are now filtered by any argument whose name matches a scalar (or enum) field on the
+  node type, keeping nodes whose value equals the argument — so parent-scoped fields like
+  `comments(postId:)`, `orders(customerId:)`, or `tasks(projectId:)` resolve from a flat seed with
+  no configuration. Pagination arguments (`first`/`last`/`before`/`after`) and arguments that don't
+  name a scalar node field are ignored; filtering runs before connection pagination and applies to
+  plain object lists as well. Node references are dereferenced against the store to read field
+  values. See <doc:FilteringAndResolving>.
+- **`Filter` declaration** — register a custom predicate `(node, arguments) -> Bool` for a
+  `"Type.field"`, overriding the argument-name convention for a field whose arguments don't map to
+  node fields by equality (ranges, substrings, computed matches).
+- **`Resolve` declaration** — register a custom resolver `(arguments, StoreView) -> GraphQLValue`
+  for a `"Type.field"`, bypassing seeded-node lookup for search, aggregation, or cross-type joins.
+  Return node references to have MockQL synthesize the connection, or a fully-formed value. A
+  resolver is authoritative: its output is not post-filtered, and declaring both a `Resolve` and a
+  `Filter` for the same field is a configuration error. The new ``StoreView`` gives resolvers
+  read-only access to stored records.
+
 ## [0.3.0] - 2026-07-23
 
 ### Added

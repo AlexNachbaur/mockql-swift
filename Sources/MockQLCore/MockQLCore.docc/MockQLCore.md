@@ -28,6 +28,7 @@ let response = await engine.execute(GraphQLRequest(query: "{ greeting }"))
 - <doc:DefiningSchemas> — SDL files or the result-builder DSL.
 - <doc:SeedingData> — the `version`/`data`/`roots` seed format and its validation rules.
 - <doc:MutationsAndState> — handlers, transactional state, and the store.
+- <doc:FilteringAndResolving> — scope list/connection fields by argument, or with a custom hook.
 - <doc:GeneratingData> — deterministic generators and field-name inference.
 - <doc:WorkingWithSubscriptions> — publishing events and consuming streams.
 
@@ -38,6 +39,7 @@ let response = await engine.execute(GraphQLRequest(query: "{ greeting }"))
 - <doc:DefiningSchemas>
 - <doc:SeedingData>
 - <doc:MutationsAndState>
+- <doc:FilteringAndResolving>
 - <doc:GeneratingData>
 - <doc:WorkingWithSubscriptions>
 
@@ -65,7 +67,12 @@ let response = await engine.execute(GraphQLRequest(query: "{ greeting }"))
 - ``Value``
 - ``Root``
 - ``Generate``
+- ``Filter``
+- ``Resolve``
 - ``MutationHandler``
+- ``FieldFilter``
+- ``FieldResolver``
+- ``StoreView``
 - ``MockQLBuilder``
 - ``FieldListBuilder``
 - ``SeedValueBuilder``

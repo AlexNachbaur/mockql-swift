@@ -9,7 +9,15 @@ struct Executor {
     let data: StoreData
     let fragments: [String: FragmentDefinitionNode]
     let variables: [String: GraphQLValue]
+    /// Custom connection/list filters, keyed `"Type.field"` (overrides the argument-name
+    /// convention for that field).
+    let filters: [String: FieldFilter]
+    /// Custom field resolvers, keyed `"Type.field"` (bypasses seeded-node lookup for that field).
+    let resolvers: [String: FieldResolver]
     private(set) var errors: [GraphQLError] = []
+
+    /// Connection pagination arguments — never treated as node-field filters.
+    private static let paginationArguments: Set<String> = ["first", "last", "before", "after"]
 
     /// Thrown when a non-null position resolves to null; caught at the nearest nullable ancestor.
     private struct NullViolation: Error {}
@@ -19,13 +27,17 @@ struct Executor {
         generators: GeneratorRegistry,
         data: StoreData,
         fragments: [String: FragmentDefinitionNode],
-        variables: [String: GraphQLValue]
+        variables: [String: GraphQLValue],
+        filters: [String: FieldFilter] = [:],
+        resolvers: [String: FieldResolver] = [:]
     ) {
         self.schema = schema
         self.generators = generators
         self.data = data
         self.fragments = fragments
         self.variables = variables
+        self.filters = filters
+        self.resolvers = resolvers
     }
 
     // MARK: - Entry points
@@ -208,7 +220,13 @@ struct Executor {
             errors.append(error)
             return .null
         }
-        let raw: GraphQLValue? = source.fields[primary.name]
+        // A registered Resolve hook fully produces the field value, bypassing seeded-node lookup.
+        let raw: GraphQLValue?
+        if let resolver = resolvers["\(source.typeName).\(primary.name)"] {
+            raw = resolver(arguments, StoreView(data))
+        } else {
+            raw = source.fields[primary.name]
+        }
         let selections = nodes.flatMap(\.selectionSet)
         do {
             return try complete(
@@ -316,7 +334,17 @@ struct Executor {
                 path: path
             )
         case .list(let element):
-            let elements = raw.listValue ?? [raw]
+            var elements = raw.listValue ?? [raw]
+            // Object-typed list fields get the same custom Filter / argument-name convention as
+            // connections (scalar/enum element lists are left untouched).
+            if let elementObjectType = schema.objectType(named: element.namedTypeName) {
+                elements = filterNodes(
+                    elements,
+                    fieldKey: "\(parent.typeName).\(fieldName)",
+                    nodeTypeName: elementObjectType.name,
+                    arguments: arguments
+                )
+            }
             var completed: [GraphQLValue] = []
             completed.reserveCapacity(elements.count)
             for (index, item) in elements.enumerated() {
@@ -364,7 +392,13 @@ struct Executor {
         case .object, .interface, .union:
             // A list value in a connection-typed position is the seeded node list; synthesize.
             if let nodes = raw.listValue, let connection = schema.connectionInfo(for: typeName) {
-                let synthesized = synthesizeConnection(nodes: nodes, info: connection, arguments: arguments)
+                let filtered = filterNodes(
+                    nodes,
+                    fieldKey: "\(parent.typeName).\(fieldName)",
+                    nodeTypeName: connection.nodeTypeName,
+                    arguments: arguments
+                )
+                let synthesized = synthesizeConnection(nodes: filtered, info: connection, arguments: arguments)
                 return try resolveObject(synthesized, concreteTypeName: typeName, selections: selections, path: path)
             }
             if let reference = raw.referenceValue {
@@ -502,6 +536,55 @@ struct Executor {
     }
 
     // MARK: - Connection synthesis
+
+    /// Filters a list- or connection-typed field's seeded nodes. A registered ``Filter`` for the
+    /// field wins; otherwise the argument-name convention applies: keep nodes whose value for a
+    /// scalar/enum field equals the same-named argument. Pagination arguments (`first`/`after`/…)
+    /// and arguments that don't name a scalar node field are ignored. For connections this runs
+    /// before pagination synthesis; for plain lists it filters the elements directly.
+    private func filterNodes(
+        _ nodes: [GraphQLValue],
+        fieldKey: String,
+        nodeTypeName: String,
+        arguments: GraphQLValue
+    ) -> [GraphQLValue] {
+        // A Resolve hook fully produces the field value, so neither the convention nor a Filter
+        // post-filters its output.
+        if resolvers[fieldKey] != nil {
+            return nodes
+        }
+        if let predicate = filters[fieldKey] {
+            return nodes.filter { predicate(dereferencedRecord($0), arguments) }
+        }
+        guard let argumentFields = arguments.objectValue else { return nodes }
+        let fieldFilters = argumentFields.filter { name, value in
+            value != .null
+                && !Self.paginationArguments.contains(name)
+                && isScalarField(name, onType: nodeTypeName)
+        }
+        guard !fieldFilters.isEmpty else { return nodes }
+        return nodes.filter { node in
+            let record = dereferencedRecord(node)
+            return fieldFilters.allSatisfy { name, value in record[name] == value }
+        }
+    }
+
+    /// The stored record a node refers to (its fields), or the node itself when it is an inline
+    /// object — so filters can read node field values by name.
+    private func dereferencedRecord(_ node: GraphQLValue) -> GraphQLValue {
+        guard let reference = node.referenceValue else { return node }
+        return data.record(type: reference.typeName, id: reference.id) ?? node
+    }
+
+    /// Whether `name` is a scalar- or enum-typed field on `typeName` — the fields the argument
+    /// convention filters by. Object-typed fields and unknown names are ignored.
+    private func isScalarField(_ name: String, onType typeName: String) -> Bool {
+        guard let field = schema.field(name, onType: typeName) else { return false }
+        switch schema.type(named: field.type.namedTypeName) {
+        case .scalar, .enumType: return true
+        default: return false
+        }
+    }
 
     private func synthesizeConnection(
         nodes: [GraphQLValue],
