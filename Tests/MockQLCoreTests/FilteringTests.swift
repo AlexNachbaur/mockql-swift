@@ -12,8 +12,10 @@ private let filterSDL = """
         products(maxPrice: Float): [Product!]!
         search(term: String!): [Article!]!
         feed(kind: String): [FeedItem!]!
+        docs(tags: String): [Doc!]!
         version: String
     }
+    type Doc { id: ID! tags: [String!]! }
     type Mutation { deleteTag(id: ID!): Boolean! }
     type CommentConnection { edges: [CommentEdge!]! pageInfo: PageInfo! }
     type CommentEdge { cursor: String! node: Comment! }
@@ -45,6 +47,9 @@ private let filterSeed = """
       Article:
         - { id: a1, title: GraphQL mocking made easy }
         - { id: a2, title: Swift concurrency }
+      Doc:
+        - { id: d1, tags: [a, b] }
+        - { id: d2, tags: [c] }
       Note:
         - { id: n1, kind: personal, text: hi }
       Photo:
@@ -53,6 +58,7 @@ private let filterSeed = """
       comments: [c1, c2, c3]
       tags: [t1, t2, t3]
       products: [pr1, pr2, pr3]
+      docs: [d1, d2]
       feed: [Note:n1, Photo:ph1]
     """
 
@@ -100,6 +106,15 @@ private func ids(_ list: GraphQLValue) -> [String] {
         // Omitting the argument returns everything.
         let all = await engine.execute(GraphQLRequest(query: "{ tags { id } }"))
         #expect(ids(all.data?["tags"] ?? .null) == ["t1", "t2", "t3"])
+    }
+
+    @Test func listOfScalarFieldIsNotTreatedAsEqualityFilter() async throws {
+        // `Doc.tags` is `[String!]!` — a list, not a singular scalar — so `docs(tags:)` must not be
+        // convention-filtered (an equality match against a scalar argument is meaningless here).
+        let engine = try await makeEngine()
+        let response = await engine.execute(GraphQLRequest(query: #"{ docs(tags: "a") { id } }"#))
+        #expect(response.errors.isEmpty)
+        #expect(ids(response.data?["docs"] ?? .null) == ["d1", "d2"])
     }
 
     @Test func interfaceElementListIsFilteredByInterfaceScalarField() async throws {

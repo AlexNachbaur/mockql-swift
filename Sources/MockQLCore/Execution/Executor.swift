@@ -586,13 +586,25 @@ struct Executor {
         return data.record(type: reference.typeName, id: reference.id)
     }
 
-    /// Whether `name` is a scalar- or enum-typed field on `typeName` — the fields the argument
-    /// convention filters by. Object-typed fields and unknown names are ignored.
+    /// Whether `name` is a singular scalar- or enum-typed field on `typeName` — the fields the
+    /// argument convention filters by equality. Object-typed fields, unknown names, and *list*
+    /// fields (e.g. `[String]`, which an equality filter can't match against a scalar argument)
+    /// are ignored.
     private func isScalarField(_ name: String, onType typeName: String) -> Bool {
         guard let field = schema.field(name, onType: typeName) else { return false }
-        switch schema.type(named: field.type.namedTypeName) {
-        case .scalar, .enumType: return true
-        default: return false
+        return isSingularScalarOrEnum(field.type)
+    }
+
+    /// Whether `type` is a scalar or enum, ignoring non-null wrappers but rejecting lists.
+    private func isSingularScalarOrEnum(_ type: TypeReference) -> Bool {
+        switch type {
+        case .nonNull(let inner): return isSingularScalarOrEnum(inner)
+        case .list: return false
+        case .named(let name):
+            switch schema.type(named: name) {
+            case .scalar, .enumType: return true
+            default: return false
+            }
         }
     }
 
