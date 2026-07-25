@@ -229,6 +229,14 @@ private func ids(_ list: GraphQLValue) -> [String] {
         }
     }
 
+    @Test func keyOnInterfaceTypeIsRejected() async throws {
+        // Hooks fire on the concrete object type that owns the field, never on an interface, so an
+        // interface-typed key would validate but never run — reject it at configuration time.
+        await #expect(throws: MockQLError.self) {
+            _ = try await makeEngine { Filter("FeedItem.id") { _, _ in true } }
+        }
+    }
+
     @Test func resolverOnScalarFieldIsAllowed() async throws {
         // A Resolve may target any field — it produces the value directly.
         let engine = try await makeEngine {

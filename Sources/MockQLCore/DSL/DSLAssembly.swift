@@ -129,18 +129,18 @@ struct DSLAssembly {
                 message: "\(kind) '\(key)' refers to unknown type '\(typeName)'.\(clause)"
             )
         }
-        let fieldNames: [String]
-        switch type {
-        case .object(let object): fieldNames = object.fields.map(\.name)
-        case .interface(let interface): fieldNames = interface.fields.map(\.name)
-        default:
+        // Hooks are looked up at runtime by the concrete object type that owns the field
+        // (`ResolutionSource.typeName`), never by an interface/union, so keys must name an object
+        // type — otherwise a key like `Filter("SomeInterface.items")` would validate but never fire.
+        guard case .object(let object) = type else {
             throw MockQLError(
                 category: .configuration,
-                message: "\(kind) '\(key)' refers to '\(typeName)', which has no fields"
+                message: "\(kind) '\(key)' refers to '\(typeName)', which is not an object type; hooks are "
+                    + "keyed by the concrete object type that owns the field"
             )
         }
-        guard let field = schema.field(fieldName, onType: typeName) else {
-            let clause = Suggestion.clause(for: fieldName, in: fieldNames)
+        guard let field = object.field(named: fieldName) else {
+            let clause = Suggestion.clause(for: fieldName, in: object.fields.map(\.name))
             throw MockQLError(
                 category: .configuration,
                 message: "\(kind) '\(key)' refers to unknown field '\(fieldName)' on '\(typeName)'.\(clause)"
