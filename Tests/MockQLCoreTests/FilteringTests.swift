@@ -11,6 +11,7 @@ private let filterSDL = """
         tags(kind: String): [Tag!]!
         products(maxPrice: Float): [Product!]!
         search(term: String!): [Article!]!
+        feed(kind: String): [FeedItem!]!
     }
     type CommentConnection { edges: [CommentEdge!]! pageInfo: PageInfo! }
     type CommentEdge { cursor: String! node: Comment! }
@@ -19,6 +20,9 @@ private let filterSDL = """
     type Tag { id: ID! kind: String! label: String! }
     type Product { id: ID! name: String! price: Float! }
     type Article { id: ID! title: String! }
+    interface FeedItem { id: ID! kind: String! }
+    type Note implements FeedItem { id: ID! kind: String! text: String! }
+    type Photo implements FeedItem { id: ID! kind: String! url: String! }
     """
 
 private let filterSeed = """
@@ -39,10 +43,15 @@ private let filterSeed = """
       Article:
         - { id: a1, title: GraphQL mocking made easy }
         - { id: a2, title: Swift concurrency }
+      Note:
+        - { id: n1, kind: personal, text: hi }
+      Photo:
+        - { id: ph1, kind: work, url: "https://example.test/p.jpg" }
     roots:
       comments: [c1, c2, c3]
       tags: [t1, t2, t3]
       products: [pr1, pr2, pr3]
+      feed: [Note:n1, Photo:ph1]
     """
 
 private func makeEngine(
@@ -74,6 +83,15 @@ private func ids(_ list: GraphQLValue) -> [String] {
         let response = await engine.execute(GraphQLRequest(query: #"{ tags(kind: "color") { id } }"#))
         #expect(response.errors.isEmpty)
         #expect(ids(response.data?["tags"] ?? .null) == ["t1", "t2"])
+    }
+
+    @Test func interfaceElementListIsFilteredByInterfaceScalarField() async throws {
+        // `kind` is a scalar field on the `FeedItem` interface — filtering a list of an interface
+        // type must work the same as a list of a concrete object type.
+        let engine = try await makeEngine()
+        let response = await engine.execute(GraphQLRequest(query: #"{ feed(kind: "personal") { id } }"#))
+        #expect(response.errors.isEmpty)
+        #expect(ids(response.data?["feed"] ?? .null) == ["n1"])
     }
 
     @Test func absentFilterArgumentReturnsAllNodes() async throws {

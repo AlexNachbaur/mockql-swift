@@ -335,13 +335,14 @@ struct Executor {
             )
         case .list(let element):
             var elements = raw.listValue ?? [raw]
-            // Object-typed list fields get the same custom Filter / argument-name convention as
-            // connections (scalar/enum element lists are left untouched).
-            if let elementObjectType = schema.objectType(named: element.namedTypeName) {
+            // Composite-element lists (object, interface, or union) get the same custom Filter /
+            // argument-name convention as connection nodes — interfaces and unions define/expose
+            // filterable fields too. Scalar/enum and nested-list elements are left untouched.
+            if let elementTypeName = compositeElementTypeName(element) {
                 elements = filterNodes(
                     elements,
                     fieldKey: "\(parent.typeName).\(fieldName)",
-                    nodeTypeName: elementObjectType.name,
+                    nodeTypeName: elementTypeName,
                     arguments: arguments
                 )
             }
@@ -583,6 +584,21 @@ struct Executor {
         switch schema.type(named: field.type.namedTypeName) {
         case .scalar, .enumType: return true
         default: return false
+        }
+    }
+
+    /// The named composite (object/interface/union) type a list element resolves to, ignoring
+    /// non-null wrappers. `nil` for scalar/enum elements or nested lists, whose elements aren't
+    /// records and so aren't node-filtered.
+    private func compositeElementTypeName(_ type: TypeReference) -> String? {
+        switch type {
+        case .nonNull(let inner): return compositeElementTypeName(inner)
+        case .list: return nil
+        case .named(let name):
+            switch schema.type(named: name) {
+            case .object, .interface, .union: return name
+            default: return nil
+            }
         }
     }
 
