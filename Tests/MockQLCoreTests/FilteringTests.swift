@@ -14,6 +14,7 @@ private let filterSDL = """
         feed(kind: String): [FeedItem!]!
         version: String
     }
+    type Mutation { deleteTag(id: ID!): Boolean! }
     type CommentConnection { edges: [CommentEdge!]! pageInfo: PageInfo! }
     type CommentEdge { cursor: String! node: Comment! }
     type PageInfo { hasNextPage: Boolean! hasPreviousPage: Boolean! startCursor: String endCursor: String }
@@ -116,6 +117,19 @@ private func ids(_ list: GraphQLValue) -> [String] {
         let engine = try await makeEngine()
         let response = await engine.execute(GraphQLRequest(query: "{ comments(first: 3) { edges { node { id } } } }"))
         #expect(nodeIDs(response.data?["comments"] ?? .null) == ["c1", "c2", "c3"])
+    }
+
+    @Test func danglingReferenceIsPreservedThroughFilteringToSurfaceError() async throws {
+        // A record deleted by a mutation but still listed in a root becomes a dangling reference.
+        // Filtering must not silently drop it — the executor's dangling-reference error must surface.
+        let engine = try await makeEngine {
+            Mutation("deleteTag") { input, state in
+                .bool(state.delete("Tag", id: input["id"].stringValue ?? ""))
+            }
+        }
+        _ = await engine.execute(GraphQLRequest(query: #"mutation { deleteTag(id: "t1") }"#))
+        let response = await engine.execute(GraphQLRequest(query: #"{ tags(kind: "color") { id } }"#))
+        #expect(response.errors.contains { $0.message.contains("Dangling reference") })
     }
 }
 

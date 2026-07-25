@@ -556,7 +556,12 @@ struct Executor {
             return nodes
         }
         if let predicate = filters[fieldKey] {
-            return nodes.filter { predicate(dereferencedRecord($0), arguments) }
+            return nodes.filter { node in
+                // Preserve dangling references so the executor's dangling-reference error still
+                // surfaces instead of being silently filtered away.
+                guard let record = resolvedRecord(node) else { return true }
+                return predicate(record, arguments)
+            }
         }
         guard let argumentFields = arguments.objectValue else { return nodes }
         let fieldFilters = argumentFields.filter { name, value in
@@ -566,16 +571,18 @@ struct Executor {
         }
         guard !fieldFilters.isEmpty else { return nodes }
         return nodes.filter { node in
-            let record = dereferencedRecord(node)
+            guard let record = resolvedRecord(node) else { return true }
             return fieldFilters.allSatisfy { name, value in record[name] == value }
         }
     }
 
-    /// The stored record a node refers to (its fields), or the node itself when it is an inline
-    /// object — so filters can read node field values by name.
-    private func dereferencedRecord(_ node: GraphQLValue) -> GraphQLValue {
+    /// The record backing a node so filters can read its fields by name: an inline object as-is,
+    /// or the stored record a reference points at. `nil` when the node is a *dangling* reference
+    /// (no such record) — those are kept through filtering so the executor's dangling-reference
+    /// error still surfaces rather than being silently dropped.
+    private func resolvedRecord(_ node: GraphQLValue) -> GraphQLValue? {
         guard let reference = node.referenceValue else { return node }
-        return data.record(type: reference.typeName, id: reference.id) ?? node
+        return data.record(type: reference.typeName, id: reference.id)
     }
 
     /// Whether `name` is a scalar- or enum-typed field on `typeName` — the fields the argument
