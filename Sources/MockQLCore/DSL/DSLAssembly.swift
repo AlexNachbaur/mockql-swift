@@ -17,6 +17,8 @@ struct DSLAssembly {
         var schema: Schema
         var handlers: [String: MutationHandler]
         var generatorBindings: [String: FieldGenerator]
+        var filters: [String: FieldFilter]
+        var resolvers: [String: FieldResolver]
         var seedDocument: GraphQLValue?
     }
 
@@ -27,6 +29,8 @@ struct DSLAssembly {
     private var seeds: [Seed] = []
     private var roots: [Root] = []
     private var generates: [Generate] = []
+    private var filters: [Filter] = []
+    private var resolves: [Resolve] = []
 
     static func assemble(_ declarations: [any MockQLDeclaration], baseSchema: Schema?) throws -> Output {
         var assembly = DSLAssembly()
@@ -59,15 +63,107 @@ struct DSLAssembly {
             }
             handlers[mutation.name] = mutation.handler
         }
+        var filters: [String: FieldFilter] = [:]
+        for filter in assembly.filters {
+            guard filters[filter.key] == nil else {
+                throw MockQLError(
+                    category: .configuration,
+                    message: "Filter for '\(filter.key)' is declared more than once"
+                )
+            }
+            try validateFieldKey(filter.key, kind: "Filter", requiringListOrConnection: true, schema: schema)
+            filters[filter.key] = filter.predicate
+        }
+        var resolvers: [String: FieldResolver] = [:]
+        for resolve in assembly.resolves {
+            guard resolvers[resolve.key] == nil else {
+                throw MockQLError(
+                    category: .configuration,
+                    message: "Resolve for '\(resolve.key)' is declared more than once"
+                )
+            }
+            guard filters[resolve.key] == nil else {
+                throw MockQLError(
+                    category: .configuration,
+                    message: "Field '\(resolve.key)' has both a Resolve and a Filter; a resolver fully "
+                        + "produces the field value, so its Filter would never run — keep one"
+                )
+            }
+            try validateFieldKey(resolve.key, kind: "Resolve", requiringListOrConnection: false, schema: schema)
+            resolvers[resolve.key] = resolve.resolver
+        }
         return Output(
             schema: schema,
             handlers: handlers,
             generatorBindings: bindings,
+            filters: filters,
+            resolvers: resolvers,
             seedDocument: assembly.seedDocument()
         )
     }
 
     // MARK: - Partitioning
+
+    /// Validates a `Filter`/`Resolve` key against the assembled schema: `Type.field` shape, the
+    /// type and field exist (with "did you mean" suggestions), and — for a `Filter` — the field
+    /// returns a list or connection. Mirrors generator-binding validation so a typo fails loudly
+    /// at configuration time instead of silently doing nothing.
+    private static func validateFieldKey(
+        _ key: String,
+        kind: String,
+        requiringListOrConnection: Bool,
+        schema: Schema
+    ) throws {
+        let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+            throw MockQLError(
+                category: .configuration,
+                message: "\(kind) key '\(key)' must have the form 'Type.field'"
+            )
+        }
+        let (typeName, fieldName) = (parts[0], parts[1])
+        guard let type = schema.type(named: typeName) else {
+            let clause = Suggestion.clause(for: typeName, in: schema.types.keys)
+            throw MockQLError(
+                category: .configuration,
+                message: "\(kind) '\(key)' refers to unknown type '\(typeName)'.\(clause)"
+            )
+        }
+        // Hooks are looked up at runtime by the concrete object type that owns the field
+        // (`ResolutionSource.typeName`), never by an interface/union, so keys must name an object
+        // type — otherwise a key like `Filter("SomeInterface.items")` would validate but never fire.
+        guard case .object(let object) = type else {
+            throw MockQLError(
+                category: .configuration,
+                message: "\(kind) '\(key)' refers to '\(typeName)', which is not an object type; hooks are "
+                    + "keyed by the concrete object type that owns the field"
+            )
+        }
+        guard let field = object.field(named: fieldName) else {
+            let clause = Suggestion.clause(for: fieldName, in: object.fields.map(\.name))
+            throw MockQLError(
+                category: .configuration,
+                message: "\(kind) '\(key)' refers to unknown field '\(fieldName)' on '\(typeName)'.\(clause)"
+            )
+        }
+        if requiringListOrConnection, !isListOrConnection(field.type, schema: schema) {
+            throw MockQLError(
+                category: .configuration,
+                message: "Filter '\(key)' targets '\(typeName).\(fieldName)', which is not a list or "
+                    + "connection field; a Filter only applies to list/connection results (use Resolve to "
+                    + "produce a scalar or object field)"
+            )
+        }
+    }
+
+    /// Whether `type` is a list, or a named connection type (ignoring non-null wrappers).
+    private static func isListOrConnection(_ type: TypeReference, schema: Schema) -> Bool {
+        switch type {
+        case .nonNull(let inner): return isListOrConnection(inner, schema: schema)
+        case .list: return true
+        case .named(let name): return schema.connectionInfo(for: name) != nil
+        }
+    }
 
     private mutating func partition(_ declarations: [any MockQLDeclaration]) throws {
         for declaration in declarations {
@@ -79,6 +175,8 @@ struct DSLAssembly {
             case let seed as Seed: seeds.append(seed)
             case let root as Root: roots.append(root)
             case let generate as Generate: generates.append(generate)
+            case let filter as Filter: filters.append(filter)
+            case let resolve as Resolve: resolves.append(resolve)
             default:
                 throw MockQLError(
                     category: .configuration,

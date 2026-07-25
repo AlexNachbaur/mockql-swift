@@ -10,6 +10,8 @@ public final class MockQLEngine: Sendable {
     public let store: StateStore
     private let generators: GeneratorRegistry
     private let handlers: [String: MutationHandler]
+    private let filters: [String: FieldFilter]
+    private let resolvers: [String: FieldResolver]
     private let hub = SubscriptionHub()
 
     /// Creates an engine.
@@ -37,6 +39,8 @@ public final class MockQLEngine: Sendable {
         let assembled = try DSLAssembly.assemble(configuration(), baseSchema: baseSchema)
         self.schema = assembled.schema
         self.handlers = assembled.handlers
+        self.filters = assembled.filters
+        self.resolvers = assembled.resolvers
 
         var bindings = assembled.generatorBindings
         for (key, generator) in generatorBindings {
@@ -113,7 +117,9 @@ public final class MockQLEngine: Sendable {
             generators: generators,
             data: await store.snapshot(),
             fragments: document.fragments,
-            variables: variables
+            variables: variables,
+            filters: filters,
+            resolvers: resolvers
         )
         let data = executor.executeQuery(selections: operation.selectionSet)
         return GraphQLResponse(data: data, errors: executor.errors)
