@@ -71,6 +71,7 @@ struct DSLAssembly {
                     message: "Filter for '\(filter.key)' is declared more than once"
                 )
             }
+            try validateFieldKey(filter.key, kind: "Filter", requiringListOrConnection: true, schema: schema)
             filters[filter.key] = filter.predicate
         }
         var resolvers: [String: FieldResolver] = [:]
@@ -88,6 +89,7 @@ struct DSLAssembly {
                         + "produces the field value, so its Filter would never run — keep one"
                 )
             }
+            try validateFieldKey(resolve.key, kind: "Resolver", requiringListOrConnection: false, schema: schema)
             resolvers[resolve.key] = resolve.resolver
         }
         return Output(
@@ -101,6 +103,67 @@ struct DSLAssembly {
     }
 
     // MARK: - Partitioning
+
+    /// Validates a `Filter`/`Resolve` key against the assembled schema: `Type.field` shape, the
+    /// type and field exist (with "did you mean" suggestions), and — for a `Filter` — the field
+    /// returns a list or connection. Mirrors generator-binding validation so a typo fails loudly
+    /// at configuration time instead of silently doing nothing.
+    private static func validateFieldKey(
+        _ key: String,
+        kind: String,
+        requiringListOrConnection: Bool,
+        schema: Schema
+    ) throws {
+        let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+            throw MockQLError(
+                category: .configuration,
+                message: "\(kind) key '\(key)' must have the form 'Type.field'"
+            )
+        }
+        let (typeName, fieldName) = (parts[0], parts[1])
+        guard let type = schema.type(named: typeName) else {
+            let clause = Suggestion.clause(for: typeName, in: schema.types.keys)
+            throw MockQLError(
+                category: .configuration,
+                message: "\(kind) '\(key)' refers to unknown type '\(typeName)'.\(clause)"
+            )
+        }
+        let fieldNames: [String]
+        switch type {
+        case .object(let object): fieldNames = object.fields.map(\.name)
+        case .interface(let interface): fieldNames = interface.fields.map(\.name)
+        default:
+            throw MockQLError(
+                category: .configuration,
+                message: "\(kind) '\(key)' refers to '\(typeName)', which has no fields"
+            )
+        }
+        guard let field = schema.field(fieldName, onType: typeName) else {
+            let clause = Suggestion.clause(for: fieldName, in: fieldNames)
+            throw MockQLError(
+                category: .configuration,
+                message: "\(kind) '\(key)' refers to unknown field '\(fieldName)' on '\(typeName)'.\(clause)"
+            )
+        }
+        if requiringListOrConnection, !isListOrConnection(field.type, schema: schema) {
+            throw MockQLError(
+                category: .configuration,
+                message: "Filter '\(key)' targets '\(typeName).\(fieldName)', which is not a list or "
+                    + "connection field; a Filter only applies to list/connection results (use Resolve to "
+                    + "produce a scalar or object field)"
+            )
+        }
+    }
+
+    /// Whether `type` is a list, or a named connection type (ignoring non-null wrappers).
+    private static func isListOrConnection(_ type: TypeReference, schema: Schema) -> Bool {
+        switch type {
+        case .nonNull(let inner): return isListOrConnection(inner, schema: schema)
+        case .list: return true
+        case .named(let name): return schema.connectionInfo(for: name) != nil
+        }
+    }
 
     private mutating func partition(_ declarations: [any MockQLDeclaration]) throws {
         for declaration in declarations {

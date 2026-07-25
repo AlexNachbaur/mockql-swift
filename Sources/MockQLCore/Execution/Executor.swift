@@ -336,8 +336,9 @@ struct Executor {
         case .list(let element):
             var elements = raw.listValue ?? [raw]
             // Composite-element lists (object, interface, or union) get the same custom Filter /
-            // argument-name convention as connection nodes — interfaces and unions define/expose
-            // filterable fields too. Scalar/enum and nested-list elements are left untouched.
+            // argument-name convention as connection nodes. The convention matches fields defined
+            // on the element type — objects and interfaces; unions define no fields, so only a
+            // custom Filter applies to them. Scalar/enum and nested-list elements are untouched.
             if let elementTypeName = compositeElementTypeName(element) {
                 elements = filterNodes(
                     elements,

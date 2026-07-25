@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolver is authoritative: its output is not post-filtered, and declaring both a `Resolve` and a
   `Filter` for the same field is a configuration error. The new ``StoreView`` gives resolvers
   read-only access to stored records.
+- **Configuration-time validation of `Filter`/`Resolve` keys** against the assembled schema —
+  `Type.field` shape, type and field existence (with "did you mean" suggestions), and, for a
+  `Filter`, that the target field returns a list or connection — so a typo fails loudly instead of
+  silently doing nothing, consistent with generator-binding validation.
 
 ## [0.3.0] - 2026-07-23
 

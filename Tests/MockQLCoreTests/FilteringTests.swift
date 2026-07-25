@@ -12,6 +12,7 @@ private let filterSDL = """
         products(maxPrice: Float): [Product!]!
         search(term: String!): [Article!]!
         feed(kind: String): [FeedItem!]!
+        version: String
     }
     type CommentConnection { edges: [CommentEdge!]! pageInfo: PageInfo! }
     type CommentEdge { cursor: String! node: Comment! }
@@ -192,5 +193,49 @@ private func ids(_ list: GraphQLValue) -> [String] {
                 Filter("Query.products") { _, _ in true }
             }
         }
+    }
+}
+
+@Suite struct KeyValidationTests {
+
+    @Test func filterWithUnknownFieldIsRejected() async throws {
+        await #expect(throws: MockQLError.self) {
+            _ = try await makeEngine { Filter("Query.produtcs") { _, _ in true } }
+        }
+    }
+
+    @Test func resolverWithUnknownFieldIsRejected() async throws {
+        await #expect(throws: MockQLError.self) {
+            _ = try await makeEngine { Resolve("Query.serach") { _, _ in .list([]) } }
+        }
+    }
+
+    @Test func keyWithUnknownTypeIsRejected() async throws {
+        await #expect(throws: MockQLError.self) {
+            _ = try await makeEngine { Filter("Qeury.products") { _, _ in true } }
+        }
+    }
+
+    @Test func malformedKeyIsRejected() async throws {
+        await #expect(throws: MockQLError.self) {
+            _ = try await makeEngine { Filter("products") { _, _ in true } }
+        }
+    }
+
+    @Test func filterOnNonListFieldIsRejected() async throws {
+        // `version` is a scalar field — a Filter has nothing to filter there.
+        await #expect(throws: MockQLError.self) {
+            _ = try await makeEngine { Filter("Query.version") { _, _ in true } }
+        }
+    }
+
+    @Test func resolverOnScalarFieldIsAllowed() async throws {
+        // A Resolve may target any field — it produces the value directly.
+        let engine = try await makeEngine {
+            Resolve("Query.version") { _, _ in .string("1.2.3") }
+        }
+        let response = await engine.execute(GraphQLRequest(query: "{ version }"))
+        #expect(response.errors.isEmpty)
+        #expect(response.data?["version"] == .string("1.2.3"))
     }
 }

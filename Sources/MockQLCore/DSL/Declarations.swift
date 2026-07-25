@@ -74,10 +74,10 @@ public struct StoreView: Sendable {
     }
 
     /// All stored records of the given object type, in insertion order.
-    public func records(of type: String) -> [MockValue] { data.allRecords(type: type) }
+    public func records(of type: String) -> [GraphQLValue] { data.allRecords(type: type) }
 
     /// The stored record of `type` with the given `id`, or `nil` if none exists.
-    public func record(type: String, id: String) -> MockValue? { data.record(type: type, id: id) }
+    public func record(type: String, id: String) -> GraphQLValue? { data.record(type: type, id: id) }
 }
 
 /// A field filter predicate: given a candidate node's stored fields and the field's coerced
