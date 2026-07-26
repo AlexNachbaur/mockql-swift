@@ -5,7 +5,7 @@ test suite. This document is self-contained: it gives you the exact APIs, the ca
 patterns, and the mistakes to avoid. Copy it into the consuming project's agent instructions
 (`AGENTS.md` / `CLAUDE.md`) or reference it by URL.
 
-Requirements: Swift 6.1+, macOS 14+/iOS 17+ hosts (also runs on Linux and Android). MockQL is
+Requirements: Swift 6.3+, macOS 14+/iOS 17+ hosts (also runs on Linux, Windows, and Android). MockQL is
 a **test-time tool**: add it to test targets only, never to an app target, and never expose it
 to non-loopback networks.
 

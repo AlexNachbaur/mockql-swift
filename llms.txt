@@ -5,7 +5,7 @@
 > Swift closures over transactional in-memory state, generates deterministic mock data for
 > unseeded fields, and serves HTTP plus graphql-transport-ws subscriptions on localhost.
 
-Swift 6.1+, SPM package with two libraries: `MockQL` (server) and `MockQLCore` (portable,
+Swift 6.3+, SPM package with two libraries: `MockQL` (server) and `MockQLCore` (portable,
 NIO-free engine). Test-time tool only.
 
 ## Integration

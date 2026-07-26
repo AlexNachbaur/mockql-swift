@@ -33,8 +33,10 @@ Status: **accepted** · Last updated: 2026-07-12
 Rules:
 
 - `MockQLCore` must never import NIO (or any Apple-only framework). It is the portability boundary:
-  platforms without NIO support (Windows) can still `import MockQLCore` and execute operations
-  in-process.
+  a host that cannot or does not want to bind a port can still `import MockQLCore` and execute
+  operations in-process. (This was originally motivated by Windows, which SwiftNIO was assumed
+  not to support; NIOPosix has since carried a Windows port and CI tests the full stack there,
+  so the boundary now earns its keep for in-process execution rather than for portability.)
 - `MockQL` re-exports `MockQLCore`, so `import MockQL` is the only import most consumers need.
 - The hand-written parser is a deliberate decision (over GraphQLSwift/GraphQL): diagnostics quality
   is a product feature, and it keeps NIO types out of the core.
