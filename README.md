@@ -1,7 +1,7 @@
 # MockQL
 
 [![Build](https://github.com/AlexNachbaur/mockql-swift/actions/workflows/build.yml/badge.svg)](https://github.com/AlexNachbaur/mockql-swift/actions/workflows/build.yml)
-[![Swift 6.1](https://img.shields.io/badge/Swift-6.1-orange.svg)](https://swift.org)
+[![Swift 6.3](https://img.shields.io/badge/Swift-6.3-orange.svg)](https://swift.org)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20%7C%20iOS%20%7C%20Linux%20%7C%20Windows%20%7C%20Android-blue.svg)](#requirements)
 [![License: MIT](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 
@@ -292,20 +292,20 @@ library to your UI testing bundle.
 
 ## Requirements
 
-MockQL requires a **Swift 6.1** toolchain and is written in cross-platform Swift — no
+MockQL requires a **Swift 6.3** toolchain and is written in cross-platform Swift — no
 Apple-only framework dependencies.
 
 | Platform | Support |
 |---|---|
-| macOS 14+ / iOS 17+ | Supported; built and tested in CI |
+| macOS 14+ | Supported; built and tested in CI |
+| iOS 17+ | Supported; built and tested in CI on a simulator |
 | Linux | Supported; built and tested in CI |
+| Windows | Supported; built and tested in CI |
 | Android (API 28+) | Supported; built and tested in CI on an Android emulator |
-| Windows | Expected to work (core engine); CI verification planned |
 
-Android builds use the official [Swift SDK for Android](https://www.swift.org/documentation/articles/swift-sdk-for-android-getting-started.html)
-(Swift 6.3+ toolchain for cross-compilation; the package manifest itself stays at
-swift-tools-version 6.1). The full stack — including the SwiftNIO transport — runs on Android,
-not just the core engine.
+Android builds use the official [Swift SDK for Android](https://www.swift.org/documentation/articles/swift-sdk-for-android-getting-started.html).
+The full stack — including the SwiftNIO transport — runs on every one of these, not just the
+core engine.
 
 The Apple OS minimums exist only to satisfy Swift concurrency availability on Apple targets —
 they don't limit support elsewhere. MockQL is built with strict Swift concurrency: no
@@ -313,12 +313,11 @@ they don't limit support elsewhere. MockQL is built with strict Swift concurrenc
 
 The package ships two libraries: **`MockQL`** (the full server — engine plus SwiftNIO-backed
 HTTP and `graphql-transport-ws` WebSocket transport) and **`MockQLCore`** (the portable,
-NIO-free engine — schema, seeds, state, and in-process execution — for platforms where SwiftNIO
-isn't available, such as Windows).
+NIO-free engine — schema, seeds, state, and in-process execution — for hosts that want to
+execute operations in-process without binding a port).
 
 ## TODO
 
-- [ ] Windows CI configuration and build scripts
 - [ ] GraphQL introspection support (for GraphiQL and codegen tooling)
 - [ ] Recorded-response seeding: normalize a captured `{"data": …}` payload into records
 

@@ -11,7 +11,7 @@ generates deterministic mock data. The `MockQL` module builds the HTTP/WebSocket
 and re-exports this module, so most users just `import MockQL`.
 
 Import `MockQLCore` directly when you want in-process execution with no server — for unit tests
-of GraphQL-consuming code, or on platforms where SwiftNIO is unavailable (such as Windows):
+of GraphQL-consuming code, or on any host that would rather not bind a port:
 
 ```swift
 import MockQLCore

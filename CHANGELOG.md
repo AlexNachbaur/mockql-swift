@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CRLF documents failed to lex.** A schema or operation with Windows line endings threw
+  `Unexpected character` at the first line break, making every `.graphqls` file unusable on a
+  default Windows git checkout. Swift's `Character` is a grapheme cluster, so `"\r\n"` is a
+  single element equal to neither `"\r"` nor `"\n"`: the lexer's whitespace switch listed both
+  and still missed it, `advance()` never counted the line, and block-string dedenting never
+  split. Line terminators are now normalized over `unicodeScalars`, where CR and LF are always
+  distinct, before tokenizing. Found by the new Windows CI job on its first run.
+
+### Changed
+
+- **Minimum toolchain is now Swift 6.3** (`swift-tools-version: 6.3`, was 6.1). This aligns
+  every package in the platform on one toolchain: the Swift SDK for Android starts at 6.3, and
+  `securestore-swift` already required it. Consumers on Swift 6.1 or 6.2 must upgrade.
+- CI now builds and tests on **macOS, an iOS simulator, Linux, Windows, and an Android
+  emulator**. Windows and iOS were previously untested, and iOS is the primary target for
+  XCUITest automation.
+- **Windows is now fully supported, transport included.** The previous claim that `MockQLCore`
+  existed for "platforms where SwiftNIO is unavailable, such as Windows" was out of date —
+  NIOPosix has carried a Windows port since well before 2.101. `MockQLCore` remains the
+  in-process execution path, which is what it is actually useful for.
+- The lint job now gates every other job, and the Linux job gates the expensive runners, so a
+  formatting or compile failure is caught before macOS/Windows/Android minutes are spent.
+- The documentation build no longer runs in CI. `swift package generate-documentation` remains
+  a required local pre-commit step (see AGENTS.md and CONTRIBUTING.md).
+- Dependabot now watches the `github-actions` ecosystem in addition to `swift`, grouped into a
+  single weekly PR.
+
 ## [0.4.0] - 2026-07-25
 
 ### Added

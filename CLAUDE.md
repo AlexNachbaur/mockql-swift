@@ -26,7 +26,7 @@ Native Swift GraphQL server for local XCUITest automation, allowing for easy plu
 These decisions were made with the project owner and are settled:
 
 - **License/distribution**: MIT, open source at `github.com/AlexNachbaur/mockql-swift`.
-- **Toolchain/platforms**: Swift 6.1. `Package.swift` declares Apple minimums (macOS 14 / iOS 17) solely for concurrency availability; this does not limit Linux/Windows/Android support.
+- **Toolchain/platforms**: Swift 6.3 (`swift-tools-version: 6.3`), matching every other package in the platform. `Package.swift` declares Apple minimums (macOS 14 / iOS 17) solely for concurrency availability; this does not limit Linux/Windows/Android support. CI builds and tests on macOS, an iOS simulator, Linux, Windows, and an Android emulator — all five must pass.
 - **Dependency policy**: SwiftNIO for the network transport, Yams for YAML. The GraphQL SDL/operation parser is **hand-written** (diagnostics quality + portability). No other dependencies without asking.
 - **Module layout**:
   - `MockQLCore` — pure portable Swift (Yams only; **never import NIO here**): value model, lexer/parsers, schema model, result-builder DSL, generators, seed loading/validation, in-memory state store, executor/engine.
@@ -45,7 +45,8 @@ These decisions were made with the project owner and are settled:
 
 - Swift Testing (`import Testing`), not XCTest, for all new tests.
 - Unit tests per module in `Tests/MockQLCoreTests` and `Tests/MockQLTests`; integration tests in `Tests/MockQLIntegrationTests` drive real HTTP/WS round-trips (URLSession / FoundationNetworking on Linux) against sample schemas + seeds stored as test resources.
-- `swift build`, `swift test`, and `swift format lint --strict --recursive Sources Tests Package.swift` must pass before any commit. CI runs macOS and Linux; code must pass on both.
+- `swift build`, `swift test`, and `swift format lint --strict --recursive Sources Tests Package.swift` must pass before any commit. CI runs macOS, an iOS simulator, Linux, Windows, and an Android emulator; code must pass on all five.
+- The DocC build (`swift package generate-documentation`) is a **local** pre-commit step and is deliberately not run in CI — a documentation regression will only be caught before you push.
 - No force unwraps in tests either — use `try #require(...)`.
 
 ## Code Style
@@ -67,5 +68,5 @@ These decisions were made with the project owner and are settled:
 
 - `docs/design/` — Architecture and design documents (`architecture.md`, `seed-format.md`)
 - `.swift-format` — Formatting configuration
-- `.github/workflows/build.yml` — CI pipeline (macOS + Linux build/test, swift-format lint)
+- `.github/workflows/build.yml` — CI pipeline (lint gate, then Linux, then macOS/iOS/Windows/Android)
 - `CHANGELOG.md` — keep the Unreleased section current as features land
