@@ -10,8 +10,51 @@ struct Lexer {
     private var column = 1
 
     private init(source: String, sourceName: String?) {
-        self.characters = Array(source)
+        self.characters = Array(Lexer.normalizingLineTerminators(source))
         self.sourceName = sourceName
+    }
+
+    /// Rewrites every line terminator to a lone newline.
+    ///
+    /// The spec treats New Line, Carriage Return, and Carriage Return + New Line as three
+    /// spellings of one line terminator, so this loses nothing. It is done here, once, rather
+    /// than by teaching each scanning site about `\r`, because Swift makes the naive version
+    /// quietly wrong: `Character` is a *grapheme cluster*, so `"\r\n"` is a single element of
+    /// `[Character]` that is equal to neither `"\r"` nor `"\n"`. A `switch` listing both still
+    /// misses it, `advance()` never counts the line, and `dedentBlockString`'s
+    /// `split(separator: "\n")` never splits.
+    ///
+    /// The symptom is that a CRLF schema fails to parse at all — `Unexpected character` on the
+    /// first line break — which is what every Windows checkout produces by default. Found by
+    /// the Windows CI job the first time it ran.
+    ///
+    /// The work happens over `unicodeScalars` rather than `Character`s, and that is the whole
+    /// point: at scalar level CR and LF are always two separate elements, so the clustering
+    /// cannot hide anything. Doing it with `contains`/`replacingOccurrences` re-introduces the
+    /// same bug one level up, because those are grapheme-aware too — `"a\r\nb".contains("\r")`
+    /// is `false`.
+    private static func normalizingLineTerminators(_ source: String) -> String {
+        guard source.unicodeScalars.contains("\r") else { return source }
+
+        var normalized = String.UnicodeScalarView()
+        normalized.reserveCapacity(source.unicodeScalars.count)
+        var previousWasCarriageReturn = false
+        for scalar in source.unicodeScalars {
+            switch scalar {
+            case "\r":
+                normalized.append("\n")
+                previousWasCarriageReturn = true
+            case "\n":
+                // A newline following a carriage return completes one CRLF terminator, and the
+                // newline for it has already been appended.
+                if !previousWasCarriageReturn { normalized.append("\n") }
+                previousWasCarriageReturn = false
+            default:
+                normalized.append(scalar)
+                previousWasCarriageReturn = false
+            }
+        }
+        return String(normalized)
     }
 
     /// Tokenizes an entire document, ending with a single `.endOfFile` token.

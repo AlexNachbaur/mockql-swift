@@ -76,6 +76,44 @@ import Testing
         #expect(throws: MockQLError.self) { try Lexer.tokenize("{ .. }") }
     }
 
+    // MARK: - Line terminators
+    //
+    // A CRLF document has to lex identically to an LF one. This is not hypothetical: git checks
+    // out text files with CRLF on Windows by default, so it is the *normal* state of a schema
+    // file there. It also cannot be asserted by reading a fixture from disk, because whether
+    // that fixture has CRLF depends on the machine running the tests — so the bytes are spelled
+    // out here instead.
+    //
+    // The trap is that Swift's `Character` is a grapheme cluster: `"\r\n"` is one element,
+    // equal to neither `"\r"` nor `"\n"`, so a scanner that handles both individually still
+    // rejects it.
+
+    @Test func carriageReturnNewlineLexesLikeNewline() throws {
+        #expect(try kinds("query {\r\n  id\r\n}") == kinds("query {\n  id\n}"))
+    }
+
+    @Test func loneCarriageReturnLexesLikeNewline() throws {
+        #expect(try kinds("query {\r  id\r}") == kinds("query {\n  id\n}"))
+    }
+
+    @Test func lineNumbersCountCRLFAsOneLine() throws {
+        let tokens = try Lexer.tokenize("query {\r\n  id\r\n}")
+        let id = try #require(tokens.first { $0.nameValue == "id" })
+        #expect(id.location == SourceLocation(line: 2, column: 3))
+    }
+
+    @Test func commentsEndAtACarriageReturn() throws {
+        let result = try kinds("a # comment\r\nb")
+        #expect(result == [.name("a"), .name("b"), .endOfFile])
+    }
+
+    @Test func blockStringsDedentAcrossCRLF() throws {
+        #expect(
+            try kinds("\"\"\"\r\n  Hello,\r\n    World!\r\n  \"\"\"")
+                == kinds("\"\"\"\n  Hello,\n    World!\n  \"\"\"")
+        )
+    }
+
     @Test func errorCarriesSourceName() {
         do {
             _ = try Lexer.tokenize("~", sourceName: "bad.graphql")

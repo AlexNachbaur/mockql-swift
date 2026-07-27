@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CRLF documents failed to lex.** A schema or operation with Windows line endings threw
+  `Unexpected character` at the first line break, making every `.graphqls` file unusable on a
+  default Windows git checkout. Swift's `Character` is a grapheme cluster, so `"\r\n"` is a
+  single element equal to neither `"\r"` nor `"\n"`: the lexer's whitespace switch listed both
+  and still missed it, `advance()` never counted the line, and block-string dedenting never
+  split. Line terminators are now normalized over `unicodeScalars`, where CR and LF are always
+  distinct, before tokenizing. Found by the new Windows CI job on its first run.
+
 ### Changed
 
 - **Minimum toolchain is now Swift 6.3** (`swift-tools-version: 6.3`, was 6.1). This aligns
