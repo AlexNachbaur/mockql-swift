@@ -44,10 +44,10 @@ Beyond formatting, the project follows these rules:
 - **Never use caseless enums as namespaces.** Enums are for enumerated values only. For
   singletons or groupings of static members, use a `struct` with static properties or a
   `final class` with `static let shared`.
-- **Stay cross-platform.** MockQL supports macOS, iOS, Linux, and Android (with Windows
-  planned). Don't import Apple-only frameworks in the library targets, and stick to Foundation
-  APIs available in swift-corelibs-foundation. CI builds and tests on macOS, Linux, and an
-  Android emulator, and must pass on all three.
+- **Stay cross-platform.** MockQL supports macOS, iOS, Linux, Windows, and Android. Don't
+  import Apple-only frameworks in the library targets, and stick to Foundation APIs available
+  in swift-corelibs-foundation. CI builds and tests on macOS, an iOS simulator, Linux, Windows,
+  and an Android emulator, and must pass on all five.
 
 ## Pull requests
 
