@@ -20,7 +20,7 @@ let package = Package(
     dependencies: [
         // The MockCore platform: shared value model, state store, generators, seed primitives,
         // diagnostics, and the MockHost/MockService transport.
-        .package(url: "https://github.com/AlexNachbaur/mockcore-swift.git", from: "0.1.0"),
+        .package(url: "https://github.com/AlexNachbaur/mockcore-swift.git", from: "0.1.2"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.70.0"),
         // Build-time only: enables `swift package generate-documentation` for the DocC catalogs.
         .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.0"),
