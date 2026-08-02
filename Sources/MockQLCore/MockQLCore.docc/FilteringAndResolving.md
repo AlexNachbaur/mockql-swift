@@ -21,6 +21,22 @@ returns only the comments whose `postId` is `"p1"`. Pagination arguments (`first
 ignored — so `comments(first: 2)` paginates without filtering. Filtering runs before connection
 pagination, and applies equally to plain object lists (`tags(kind:): [Tag!]!`).
 
+### Null arguments do not filter
+
+An argument whose value is `null` — whether written literally or supplied by a null variable — is
+**ignored**, exactly as an omitted argument is. This matches how real GraphQL servers read an unset
+optional filter, and it matters because generated clients rely on it: Apollo iOS compiles
+
+```graphql
+query Tags($group: String) { tags(group: $group) { id } }
+```
+
+into a request carrying `"group": null` whether or not the caller set the variable. Treating that
+as an equality filter against null would return an empty list for the most ordinary query a real
+app can send.
+
+To match nodes whose field *is* null, say so explicitly with a ``Filter`` — see below.
+
 Node references are dereferenced against the store to read their field values, so both reference
 lists (`comments: [c1, c2, c3]` in `roots:`) and inline nested objects filter correctly.
 
@@ -69,3 +85,33 @@ for the same field is a configuration error.
 - ``FieldFilter``
 - ``FieldResolver``
 - ``StoreView``
+
+## Diagnosing an unexpected result
+
+Filtering is deliberately quiet: an argument that names no scalar node field is ignored, and a
+filter that matches nothing returns an empty list. Both are correct, and both look identical to a
+mis-seeded store from the client side.
+
+Pass `diagnostics: true` and every list or connection field reports what happened, under
+`extensions.mockql.fields`:
+
+```swift
+let engine = try await MockQLEngine(schema: .sdl(sdl), seed: .yaml(seed), diagnostics: true)
+```
+
+```json
+{ "data": { "tags": [] },
+  "extensions": { "mockql": { "fields": {
+      "Query.tags": { "filteredBy": ["group"], "seeded": 3, "returned": 0 } } } } }
+```
+
+- `filteredBy` — arguments applied as equality filters.
+- `ignoredArguments` — arguments present that filtered nothing. An argument you *expected* to
+  filter appearing here means it does not name a singular scalar field on the node type: a typo,
+  a list-typed field, or schema drift.
+- `seeded` / `returned` — candidate nodes before and after filtering, which separates "the filter
+  excluded everything" from "nothing was seeded".
+- `customFilter` / `customResolver` — a ``Filter`` or ``Resolve`` hook took over for that field.
+
+Off by default, and scoped to the response rather than a log, so it works identically in-process,
+over HTTP, and on platforms with no logging backend.

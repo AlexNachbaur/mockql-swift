@@ -15,6 +15,11 @@ struct Executor {
     /// Custom field resolvers, keyed `"Type.field"` (bypasses seeded-node lookup for that field).
     let resolvers: [String: FieldResolver]
     private(set) var errors: [GraphQLError] = []
+    /// Whether to record per-field filtering diagnostics. Off by default — the cost is small
+    /// but the output is noise unless someone is asking "why is this list empty?".
+    let diagnosticsEnabled: Bool
+    /// Per-field filtering diagnostics, keyed `"Type.field"`. Empty unless enabled.
+    private(set) var diagnostics: [String: FieldDiagnostics] = [:]
 
     /// Connection pagination arguments — never treated as node-field filters.
     private static let paginationArguments: Set<String> = ["first", "last", "before", "after"]
@@ -29,8 +34,10 @@ struct Executor {
         fragments: [String: FragmentDefinitionNode],
         variables: [String: GraphQLValue],
         filters: [String: FieldFilter] = [:],
-        resolvers: [String: FieldResolver] = [:]
+        resolvers: [String: FieldResolver] = [:],
+        diagnosticsEnabled: Bool = false
     ) {
+        self.diagnosticsEnabled = diagnosticsEnabled
         self.schema = schema
         self.generators = generators
         self.data = data
@@ -544,7 +551,7 @@ struct Executor {
     /// scalar/enum field equals the same-named argument. Pagination arguments (`first`/`after`/…)
     /// and arguments that don't name a scalar node field are ignored. For connections this runs
     /// before pagination synthesis; for plain lists it filters the elements directly.
-    private func filterNodes(
+    private mutating func filterNodes(
         _ nodes: [GraphQLValue],
         fieldKey: String,
         nodeTypeName: String,
@@ -553,28 +560,84 @@ struct Executor {
         // A Resolve hook fully produces the field value, so neither the convention nor a Filter
         // post-filters its output.
         if resolvers[fieldKey] != nil {
+            record(fieldKey: fieldKey, seeded: nodes.count, returned: nodes.count, customResolver: true)
             return nodes
         }
         if let predicate = filters[fieldKey] {
-            return nodes.filter { node in
+            let filtered = nodes.filter { node in
                 // Preserve dangling references so the executor's dangling-reference error still
                 // surfaces instead of being silently filtered away.
                 guard let record = resolvedRecord(node) else { return true }
                 return predicate(record, arguments)
             }
+            record(fieldKey: fieldKey, seeded: nodes.count, returned: filtered.count, customFilter: true)
+            return filtered
         }
         guard let argumentFields = arguments.objectValue else { return nodes }
-        // An omitted argument is absent from the coerced arguments; an explicit `field: null` is
-        // present as `.null`. So a present null is a real equality filter (match null-valued nodes)
-        // and needs no special-casing here.
-        let fieldFilters = argumentFields.filter { name, _ in
-            !Self.paginationArguments.contains(name) && isScalarField(name, onType: nodeTypeName)
+        // A `null` argument means "no filter", matching how real GraphQL servers read an unset
+        // optional filter.
+        //
+        // This is not merely a convenience: generated clients emit explicit nulls for every unset
+        // optional variable. Apollo iOS compiles `query Q($status: Status) { things(status: $status) }`
+        // into a request carrying `"status": null` whether or not the caller set it — so treating a
+        // present null as an equality filter against null silently returned an EMPTY list for the
+        // most ordinary query a real app can send, with nothing in the response to say why.
+        //
+        // Matching a null-valued field is still expressible, just not by accident: declare a
+        // ``Filter`` for that field and compare explicitly.
+        let fieldFilters = argumentFields.filter { name, value in
+            !value.isNull && !Self.paginationArguments.contains(name) && isScalarField(name, onType: nodeTypeName)
         }
-        guard !fieldFilters.isEmpty else { return nodes }
-        return nodes.filter { node in
+        guard !fieldFilters.isEmpty else {
+            let ignored = nonFilteringArgumentNames(argumentFields, applied: [])
+            record(fieldKey: fieldKey, seeded: nodes.count, returned: nodes.count, ignoredArguments: ignored)
+            return nodes
+        }
+        let filtered = nodes.filter { node in
             guard let record = resolvedRecord(node) else { return true }
             return fieldFilters.allSatisfy { name, value in record[name] == value }
         }
+        let applied = Set(fieldFilters.keys)
+        let ignored = nonFilteringArgumentNames(argumentFields, applied: applied)
+        record(
+            fieldKey: fieldKey,
+            seeded: nodes.count,
+            returned: filtered.count,
+            filteredBy: Array(applied),
+            ignoredArguments: ignored
+        )
+        return filtered
+    }
+
+    /// Argument names that were present but applied no filter, excluding pagination.
+    private func nonFilteringArgumentNames(
+        _ argumentFields: [String: GraphQLValue],
+        applied: Set<String>
+    ) -> [String] {
+        argumentFields.keys.filter { name in
+            !applied.contains(name) && !Self.paginationArguments.contains(name)
+        }
+    }
+
+    /// Records diagnostics for a field, when enabled.
+    private mutating func record(
+        fieldKey: String,
+        seeded: Int,
+        returned: Int,
+        filteredBy: [String] = [],
+        ignoredArguments: [String] = [],
+        customFilter: Bool = false,
+        customResolver: Bool = false
+    ) {
+        guard diagnosticsEnabled else { return }
+        diagnostics[fieldKey] = FieldDiagnostics(
+            filteredBy: filteredBy,
+            ignoredArguments: ignoredArguments,
+            customFilter: customFilter,
+            customResolver: customResolver,
+            seeded: seeded,
+            returned: returned
+        )
     }
 
     /// The record backing a node so filters can read its fields by name: an inline object as-is,

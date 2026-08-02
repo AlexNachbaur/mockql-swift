@@ -40,11 +40,18 @@ public struct GraphQLResponse: Sendable, Hashable {
     public let data: GraphQLValue?
     /// Any errors raised while validating or executing.
     public let errors: [GraphQLError]
+    /// The `extensions` entry; `nil` unless diagnostics are enabled.
+    ///
+    /// GraphQL reserves `extensions` for exactly this — implementation-specific detail that
+    /// travels with the response — so diagnostics reach any client on any platform without a
+    /// logging backend in the portable core.
+    public let extensions: GraphQLValue?
 
     /// Creates a response.
-    public init(data: GraphQLValue?, errors: [GraphQLError] = []) {
+    public init(data: GraphQLValue?, errors: [GraphQLError] = [], extensions: GraphQLValue? = nil) {
         self.data = data
         self.errors = errors
+        self.extensions = extensions
     }
 
     /// A response with only errors and no data (request-level failure).
@@ -60,6 +67,9 @@ public struct GraphQLResponse: Sendable, Hashable {
         }
         if !errors.isEmpty {
             fields["errors"] = .list(errors.map(\.responseValue))
+        }
+        if let extensions {
+            fields["extensions"] = extensions
         }
         return .object(fields)
     }
