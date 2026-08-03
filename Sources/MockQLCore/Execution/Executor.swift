@@ -630,14 +630,19 @@ struct Executor {
         customResolver: Bool = false
     ) {
         guard diagnosticsEnabled else { return }
-        diagnostics[fieldKey] = FieldDiagnostics(
+        // Merged, not assigned: the same `"Type.field"` resolves once per parent (`Post.comments`
+        // for every post) and once per alias, and keeping only the last would report one
+        // arbitrary occurrence as though it were the whole query.
+        let entry = FieldDiagnostics(
             filteredBy: filteredBy,
             ignoredArguments: ignoredArguments,
             customFilter: customFilter,
             customResolver: customResolver,
             seeded: seeded,
-            returned: returned
+            returned: returned,
+            occurrences: 1
         )
+        diagnostics[fieldKey, default: FieldDiagnostics()].merge(entry)
     }
 
     /// The record backing a node so filters can read its fields by name: an inline object as-is,

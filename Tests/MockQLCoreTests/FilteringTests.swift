@@ -381,6 +381,25 @@ struct QueryDiagnosticsTests {
         #expect(entry["returned"].intValue == 1)
     }
 
+    @Test func diagnosticsAggregateRepeatedResolutionsOfTheSameField() async throws {
+        // A `"Type.field"` key can resolve many times in one response — once per parent for a
+        // nested list, or once per alias as here. Recording each occurrence over the last would
+        // report one arbitrary slice as though it were the whole query, which is worse than no
+        // diagnostics: it reads as authoritative.
+        let engine = try await MockQLEngine(schema: .sdl(filterSDL), seed: .yaml(filterSeed), diagnostics: true)
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: #"{ byKind: tags(kind: "color") { id } byGroup: tags(group: "archive") { id } }"#
+            )
+        )
+        let entry = diagnostics(response, field: "Query.tags")
+        #expect(entry["occurrences"].intValue == 2)
+        // Counts sum across occurrences: three candidates considered each time.
+        #expect(entry["seeded"].intValue == 6)
+        // Argument names union, so neither alias's filter is hidden by the other.
+        #expect(entry["filteredBy"].listValue?.compactMap(\.stringValue) == ["group", "kind"])
+    }
+
     @Test func diagnosticsAppearInTheSerializedResponse() async throws {
         // `extensions` has to survive into the wire payload, or it is invisible to the client
         // that needs it.

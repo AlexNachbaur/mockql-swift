@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   store. `ignoredArguments` is the high-value half: an argument you expected to filter showing up
   there means it does not name a singular scalar field on the node type.
 
+  A field resolving more than once in a response — once per parent for a nested list, once per
+  alias — is aggregated rather than overwritten: counts sum, argument names union, and an
+  `occurrences` count says how many were folded in.
+
   Off by default. Carried in `extensions` rather than a log so it behaves identically in-process,
   over HTTP, and on platforms with no logging backend.
 

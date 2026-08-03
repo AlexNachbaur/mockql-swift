@@ -112,6 +112,9 @@ let engine = try await MockQLEngine(schema: .sdl(sdl), seed: .yaml(seed), diagno
 - `seeded` / `returned` — candidate nodes before and after filtering, which separates "the filter
   excluded everything" from "nothing was seeded".
 - `customFilter` / `customResolver` — a ``Filter`` or ``Resolve`` hook took over for that field.
+- `occurrences` — present when the field resolved more than once in the response (once per parent
+  for a nested list, or once per alias). Counts are summed and argument names unioned across all
+  of them, so the entry describes the whole query rather than one arbitrary occurrence.
 
 Off by default, and scoped to the response rather than a log, so it works identically in-process,
 over HTTP, and on platforms with no logging backend.

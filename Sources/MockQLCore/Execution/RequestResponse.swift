@@ -40,11 +40,11 @@ public struct GraphQLResponse: Sendable, Hashable {
     public let data: GraphQLValue?
     /// Any errors raised while validating or executing.
     public let errors: [GraphQLError]
-    /// The `extensions` entry; `nil` unless diagnostics are enabled.
+    /// The `extensions` entry — implementation-specific detail travelling with the response, as
+    /// GraphQL reserves the key for. `nil` when there is none.
     ///
-    /// GraphQL reserves `extensions` for exactly this — implementation-specific detail that
-    /// travels with the response — so diagnostics reach any client on any platform without a
-    /// logging backend in the portable core.
+    /// The engine populates it only with query diagnostics, and only when those are enabled, but
+    /// the field itself is general: anything constructing a `GraphQLResponse` may supply its own.
     public let extensions: GraphQLValue?
 
     /// Creates a response.
