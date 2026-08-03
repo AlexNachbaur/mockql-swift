@@ -12,6 +12,8 @@ public final class MockQLEngine: Sendable {
     private let handlers: [String: MutationHandler]
     private let filters: [String: FieldFilter]
     private let resolvers: [String: FieldResolver]
+    /// Whether to attach per-field filtering diagnostics under `extensions.mockql`.
+    private let diagnosticsEnabled: Bool
     private let hub = SubscriptionHub()
 
     /// Creates an engine.
@@ -32,6 +34,7 @@ public final class MockQLEngine: Sendable {
         seed seedSource: SeedSource? = nil,
         generators generatorBindings: [String: FieldGenerator] = [:],
         serverSeed: UInt64 = 0,
+        diagnostics: Bool = false,
         store: StateStore? = nil,
         @MockQLBuilder configuration: () -> [any MockQLDeclaration] = { [] }
     ) async throws {
@@ -41,6 +44,7 @@ public final class MockQLEngine: Sendable {
         self.handlers = assembled.handlers
         self.filters = assembled.filters
         self.resolvers = assembled.resolvers
+        self.diagnosticsEnabled = diagnostics
 
         var bindings = assembled.generatorBindings
         for (key, generator) in generatorBindings {
@@ -119,10 +123,15 @@ public final class MockQLEngine: Sendable {
             fragments: document.fragments,
             variables: variables,
             filters: filters,
-            resolvers: resolvers
+            resolvers: resolvers,
+            diagnosticsEnabled: diagnosticsEnabled
         )
         let data = executor.executeQuery(selections: operation.selectionSet)
-        return GraphQLResponse(data: data, errors: executor.errors)
+        return GraphQLResponse(
+            data: data,
+            errors: executor.errors,
+            extensions: executor.diagnostics.mockQLExtensions
+        )
     }
 
     private func executeMutation(

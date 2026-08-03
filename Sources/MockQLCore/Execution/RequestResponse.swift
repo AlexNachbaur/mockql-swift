@@ -40,11 +40,18 @@ public struct GraphQLResponse: Sendable, Hashable {
     public let data: GraphQLValue?
     /// Any errors raised while validating or executing.
     public let errors: [GraphQLError]
+    /// The `extensions` entry — implementation-specific detail travelling with the response, as
+    /// GraphQL reserves the key for. `nil` when there is none.
+    ///
+    /// The engine populates it only with query diagnostics, and only when those are enabled, but
+    /// the field itself is general: anything constructing a `GraphQLResponse` may supply its own.
+    public let extensions: GraphQLValue?
 
     /// Creates a response.
-    public init(data: GraphQLValue?, errors: [GraphQLError] = []) {
+    public init(data: GraphQLValue?, errors: [GraphQLError] = [], extensions: GraphQLValue? = nil) {
         self.data = data
         self.errors = errors
+        self.extensions = extensions
     }
 
     /// A response with only errors and no data (request-level failure).
@@ -60,6 +67,9 @@ public struct GraphQLResponse: Sendable, Hashable {
         }
         if !errors.isEmpty {
             fields["errors"] = .list(errors.map(\.responseValue))
+        }
+        if let extensions {
+            fields["extensions"] = extensions
         }
         return .object(fields)
     }

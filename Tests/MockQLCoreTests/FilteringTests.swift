@@ -93,19 +93,50 @@ private func ids(_ list: GraphQLValue) -> [String] {
         #expect(ids(response.data?["tags"] ?? .null) == ["t1", "t2"])
     }
 
-    @Test func explicitNullArgumentFiltersToNullValuedNodes() async throws {
-        // An explicit `group: null` is a real equality filter — it matches nodes whose `group` is
-        // null (t1, t3), unlike an omitted argument which doesn't filter at all.
+    @Test func explicitNullArgumentDoesNotFilter() async throws {
+        // An explicit `group: null` means "no filter", exactly as omitting it does — the reading
+        // every real GraphQL server gives an unset optional filter.
         let engine = try await makeEngine()
         let explicit = await engine.execute(GraphQLRequest(query: "{ tags(group: null) { id } }"))
         #expect(explicit.errors.isEmpty)
-        #expect(ids(explicit.data?["tags"] ?? .null) == ["t1", "t3"])
+        #expect(ids(explicit.data?["tags"] ?? .null) == ["t1", "t2", "t3"])
         // A non-null value still filters by equality.
         let archived = await engine.execute(GraphQLRequest(query: #"{ tags(group: "archive") { id } }"#))
         #expect(ids(archived.data?["tags"] ?? .null) == ["t2"])
-        // Omitting the argument returns everything.
+        // Omitting the argument returns everything, same as the explicit null above.
         let all = await engine.execute(GraphQLRequest(query: "{ tags { id } }"))
         #expect(ids(all.data?["tags"] ?? .null) == ["t1", "t2", "t3"])
+    }
+
+    @Test func nullVariableForUnsetOptionalFilterReturnsEverything() async throws {
+        // The regression this behaviour exists for. Generated clients (Apollo iOS, and the same
+        // is true of Relay/urql) compile an unset optional variable into an explicit `null` in the
+        // variables payload — so this is what a real app sends for "no filter selected", not an
+        // exotic edge case. Before, it returned an empty list and the app silently rendered
+        // nothing with no error to explain it.
+        let engine = try await makeEngine()
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: "query Tags($group: String) { tags(group: $group) { id } }",
+                variables: ["group": .null]
+            )
+        )
+        #expect(response.errors.isEmpty)
+        #expect(ids(response.data?["tags"] ?? .null) == ["t1", "t2", "t3"])
+    }
+
+    @Test func matchingNullValuedNodesStillPossibleWithACustomFilter() async throws {
+        // The capability the convention change gives up is still available — deliberately, rather
+        // than by accident — through the documented escape hatch.
+        let engine = try await makeEngine {
+            Filter("Query.tags") { node, arguments in
+                guard let group = arguments.objectValue?["group"], group.isNull else { return true }
+                return node["group"].isNull
+            }
+        }
+        let response = await engine.execute(GraphQLRequest(query: "{ tags(group: null) { id } }"))
+        #expect(response.errors.isEmpty)
+        #expect(ids(response.data?["tags"] ?? .null) == ["t1", "t3"])
     }
 
     @Test func listOfScalarFieldIsNotTreatedAsEqualityFilter() async throws {
@@ -289,5 +320,91 @@ private func ids(_ list: GraphQLValue) -> [String] {
         let response = await engine.execute(GraphQLRequest(query: "{ version }"))
         #expect(response.errors.isEmpty)
         #expect(response.data?["version"] == .string("1.2.3"))
+    }
+}
+
+@Suite("Query diagnostics")
+struct QueryDiagnosticsTests {
+
+    private func diagnostics(_ response: GraphQLResponse, field: String) -> GraphQLValue {
+        response.extensions?["mockql"]["fields"][field] ?? .null
+    }
+
+    @Test func diagnosticsAreAbsentUnlessEnabled() async throws {
+        // Off by default: the payload is noise unless someone is asking why a list is empty.
+        let engine = try await MockQLEngine(schema: .sdl(filterSDL), seed: .yaml(filterSeed))
+        let response = await engine.execute(GraphQLRequest(query: #"{ tags(group: "archive") { id } }"#))
+        #expect(response.extensions == nil)
+    }
+
+    @Test func diagnosticsReportTheAppliedFilterAndCounts() async throws {
+        let engine = try await MockQLEngine(schema: .sdl(filterSDL), seed: .yaml(filterSeed), diagnostics: true)
+        let response = await engine.execute(GraphQLRequest(query: #"{ tags(group: "archive") { id } }"#))
+        let entry = diagnostics(response, field: "Query.tags")
+        #expect(entry["filteredBy"].listValue?.compactMap(\.stringValue) == ["group"])
+        #expect(entry["seeded"].intValue == 3)
+        #expect(entry["returned"].intValue == 1)
+    }
+
+    @Test func diagnosticsNameAnArgumentThatFilteredNothing() async throws {
+        // The high-value case. `docs(tags:)` is a perfectly valid argument, but `Doc.tags` is a
+        // list rather than a singular scalar, so the convention does not filter on it and the
+        // query returns everything — indistinguishable, without this, from a filter that matched
+        // every row. The same shape covers a drifted or misspelled argument name.
+        let engine = try await MockQLEngine(schema: .sdl(filterSDL), seed: .yaml(filterSeed), diagnostics: true)
+        let response = await engine.execute(GraphQLRequest(query: #"{ docs(tags: "a") { id } }"#))
+        let entry = diagnostics(response, field: "Query.docs")
+        #expect(entry["ignoredArguments"].listValue?.compactMap(\.stringValue) == ["tags"])
+        #expect(entry["filteredBy"] == .null)
+        #expect(entry["returned"].intValue == entry["seeded"].intValue)
+    }
+
+    @Test func diagnosticsShowANullArgumentIsNotAFilter() async throws {
+        // Reading this is what would have identified the null-argument regression in seconds:
+        // `group` present in the query, absent from `filteredBy`, everything returned.
+        let engine = try await MockQLEngine(schema: .sdl(filterSDL), seed: .yaml(filterSeed), diagnostics: true)
+        let response = await engine.execute(GraphQLRequest(query: "{ tags(group: null) { id } }"))
+        let entry = diagnostics(response, field: "Query.tags")
+        #expect(entry["filteredBy"] == .null)
+        #expect(entry["ignoredArguments"].listValue?.compactMap(\.stringValue) == ["group"])
+        #expect(entry["seeded"].intValue == 3)
+        #expect(entry["returned"].intValue == 3)
+    }
+
+    @Test func diagnosticsMarkACustomFilter() async throws {
+        let engine = try await MockQLEngine(schema: .sdl(filterSDL), seed: .yaml(filterSeed), diagnostics: true) {
+            Filter("Query.tags") { node, _ in node["id"].stringValue == "t2" }
+        }
+        let response = await engine.execute(GraphQLRequest(query: "{ tags { id } }"))
+        let entry = diagnostics(response, field: "Query.tags")
+        #expect(entry["customFilter"].boolValue == true)
+        #expect(entry["returned"].intValue == 1)
+    }
+
+    @Test func diagnosticsAggregateRepeatedResolutionsOfTheSameField() async throws {
+        // A `"Type.field"` key can resolve many times in one response — once per parent for a
+        // nested list, or once per alias as here. Recording each occurrence over the last would
+        // report one arbitrary slice as though it were the whole query, which is worse than no
+        // diagnostics: it reads as authoritative.
+        let engine = try await MockQLEngine(schema: .sdl(filterSDL), seed: .yaml(filterSeed), diagnostics: true)
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: #"{ byKind: tags(kind: "color") { id } byGroup: tags(group: "archive") { id } }"#
+            )
+        )
+        let entry = diagnostics(response, field: "Query.tags")
+        #expect(entry["occurrences"].intValue == 2)
+        // Counts sum across occurrences: three candidates considered each time.
+        #expect(entry["seeded"].intValue == 6)
+        // Argument names union, so neither alias's filter is hidden by the other.
+        #expect(entry["filteredBy"].listValue?.compactMap(\.stringValue) == ["group", "kind"])
+    }
+
+    @Test func diagnosticsAppearInTheSerializedResponse() async throws {
+        // `extensions` has to survive into the wire payload, or it is invisible to the client
+        // that needs it.
+        let engine = try await MockQLEngine(schema: .sdl(filterSDL), seed: .yaml(filterSeed), diagnostics: true)
+        let response = await engine.execute(GraphQLRequest(query: "{ tags { id } }"))
+        #expect(response.responseValue["extensions"]["mockql"]["fields"]["Query.tags"]["seeded"].intValue == 3)
     }
 }

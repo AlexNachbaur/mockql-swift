@@ -5,6 +5,51 @@ All notable changes to MockQL will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Query diagnostics (`diagnostics: true`).** Every list- and connection-typed field reports how
+  it was narrowed, under `extensions.mockql.fields`: the arguments applied as filters, the
+  arguments that were present but filtered nothing, the node counts before and after, and whether
+  a `Filter` or `Resolve` hook took over.
+
+  Filtering is quiet by design — an argument naming no scalar node field is ignored, and a filter
+  matching nothing returns an empty list — and from the client both look exactly like a mis-seeded
+  store. `ignoredArguments` is the high-value half: an argument you expected to filter showing up
+  there means it does not name a singular scalar field on the node type.
+
+  A field resolving more than once in a response — once per parent for a nested list, once per
+  alias — is aggregated rather than overwritten: counts sum, argument names union, and an
+  `occurrences` count says how many were folded in.
+
+  Off by default. Carried in `extensions` rather than a log so it behaves identically in-process,
+  over HTTP, and on platforms with no logging backend.
+
+### Fixed
+
+- **A `null` filter argument returned an empty list instead of everything.** The argument-name
+  convention treated an explicitly-passed `null` as an equality filter *against null*, so
+  `things(status: null)` matched only nodes whose `status` was null — usually none. That is
+  defensible as a strict reading, but it is not what real GraphQL servers do, and it broke the
+  single most common query a generated client can send: Apollo iOS (like Relay and urql) compiles
+  an unset optional variable into an explicit `null` in the variables payload, so
+  `query Q($status: Status) { things(status: $status) }` carries `"status": null` whether or not
+  the caller set it. Consumers saw an empty result with no error explaining it — silent strictness,
+  which is as much of a bug factory in test infrastructure as silent leniency.
+
+  A null argument is now ignored, exactly as an omitted one is.
+
+  **Behaviour change.** Matching null-valued nodes is still possible, but must now be stated
+  explicitly with a `Filter` rather than falling out of the convention:
+
+  ```swift
+  Filter("Query.tags") { node, arguments in
+      guard let group = arguments.objectValue?["group"], group.isNull else { return true }
+      return node["group"].isNull
+  }
+  ```
+
 ## [0.4.1] - 2026-07-27
 
 ### Fixed
