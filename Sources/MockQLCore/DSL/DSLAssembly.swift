@@ -40,7 +40,7 @@ struct DSLAssembly {
         if let baseSchema {
             try assembly.validateOverlay(against: baseSchema)
             schema = baseSchema
-            bindings = assembly.overlayBindings()
+            bindings = try assembly.overlayBindings()
         } else {
             (schema, bindings) = try assembly.synthesizeSchema()
         }
@@ -98,7 +98,7 @@ struct DSLAssembly {
             generatorBindings: bindings,
             filters: filters,
             resolvers: resolvers,
-            seedDocument: assembly.seedDocument()
+            seedDocument: try assembly.seedDocument()
         )
     }
 
@@ -267,13 +267,21 @@ struct DSLAssembly {
         }
     }
 
-    private func overlayBindings() -> [String: FieldGenerator] {
+    private func overlayBindings() throws -> [String: FieldGenerator] {
         var bindings: [String: FieldGenerator] = [:]
         for object in objects {
             for field in object.fields {
-                if case .scalar(let generator) = field.kind {
-                    bindings["\(object.typeName).\(field.name)"] = generator
+                guard case .scalar(let generator) = field.kind else { continue }
+                let key = "\(object.typeName).\(field.name)"
+                // Same rule, same wording, as two `Generate` declarations for one field: which
+                // generator was meant is a guess MockQL shouldn't make.
+                guard bindings[key] == nil else {
+                    throw MockQLError(
+                        category: .configuration,
+                        message: "Generator for '\(key)' is declared more than once"
+                    )
                 }
+                bindings[key] = generator
             }
         }
         return bindings
@@ -400,10 +408,13 @@ struct DSLAssembly {
 
     // MARK: - Seeds
 
-    private func seedDocument() -> GraphQLValue? {
+    private func seedDocument() throws -> GraphQLValue? {
         guard !seeds.isEmpty || !roots.isEmpty else { return nil }
         var dataSection: [String: GraphQLValue] = [:]
         for seed in seeds {
+            if let problem = seed.problem {
+                throw MockQLError(category: .configuration, message: problem)
+            }
             var fields = seed.fields
             if let id = seed.id {
                 fields["id"] = .string(id)
@@ -419,6 +430,13 @@ struct DSLAssembly {
         if !roots.isEmpty {
             var rootsSection: [String: GraphQLValue] = [:]
             for root in roots {
+                guard rootsSection[root.field] == nil else {
+                    throw MockQLError(
+                        category: .configuration,
+                        message: "Root '\(root.field)' is declared more than once; a root field has one binding "
+                            + "(pass a list to bind several records)"
+                    )
+                }
                 rootsSection[root.field] = root.value
             }
             document["roots"] = .object(rootsSection)

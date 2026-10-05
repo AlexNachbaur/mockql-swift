@@ -1,7 +1,10 @@
 /// A reference to a type in a GraphQL document: `User`, `[User]`, `User!`, `[User!]!`, …
 public indirect enum TypeReference: Hashable, Sendable, CustomStringConvertible {
+    /// A named type: `User`.
     case named(String)
+    /// A list of the wrapped type: `[User]`.
     case list(TypeReference)
+    /// The wrapped type with null excluded: `User!`.
     case nonNull(TypeReference)
 
     /// The innermost named type (`[User!]!` → `User`).
@@ -36,6 +39,7 @@ public indirect enum TypeReference: Hashable, Sendable, CustomStringConvertible 
         return nil
     }
 
+    /// The reference in SDL notation, e.g. `[User!]!`.
     public var description: String {
         switch self {
         case .named(let name): return name
@@ -101,8 +105,11 @@ indirect enum SelectionNode: Hashable, Sendable {
 
 /// The three GraphQL operation types.
 public enum OperationType: String, Hashable, Sendable {
+    /// A read-only fetch.
     case query
+    /// A write followed by a fetch.
     case mutation
+    /// A long-lived request that receives events as they are published.
     case subscription
 }
 
@@ -122,6 +129,11 @@ struct OperationNode: Hashable, Sendable {
     let directives: [DirectiveNode]
     let selectionSet: [SelectionNode]
     let location: SourceLocation
+
+    /// The names of the variables this operation declares (without the `$`).
+    var declaredVariableNames: Set<String> {
+        Set(variableDefinitions.map(\.name))
+    }
 }
 
 /// A named fragment definition.

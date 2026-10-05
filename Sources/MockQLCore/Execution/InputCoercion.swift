@@ -115,7 +115,17 @@ struct InputCoercion {
             return value
         }
         switch (scalar.name, value) {
-        case ("Int", .int):
+        case ("Int", .int(let int)):
+            // GraphQL's Int is a signed 32-bit integer. A real server rejects anything wider, so
+            // accepting it here would let a test pass against the mock and fail in production.
+            guard Int32(exactly: int) != nil else {
+                throw error(
+                    "Expected Int for \(context), found \(int), which is outside the signed 32-bit range "
+                        + "GraphQL's Int allows (use Float or a custom scalar for larger numbers)",
+                    location: location,
+                    path: path
+                )
+            }
             return value
         case ("Float", .int(let int)):
             return .double(Double(int))

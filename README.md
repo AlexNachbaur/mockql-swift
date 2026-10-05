@@ -263,6 +263,11 @@ try await server.publish("orderStatusChanged", payload: [
 Payload fields you omit are filled by generators, and payloads may reference seeded records
 (`.reference("Order", id: "order-1")`).
 
+A subscription's arguments are validated when the client subscribes, so a missing or mistyped
+one is reported straight away as a protocol `error`. Clients that send everything down one
+socket work too: a query or mutation sent with `subscribe` gets a single `next` and then
+`complete`.
+
 ## Installation
 
 ### Swift Package Manager
@@ -304,8 +309,16 @@ Apple-only framework dependencies.
 | Android (API 28+) | Supported; built and tested in CI on an Android emulator |
 
 Android builds use the official [Swift SDK for Android](https://www.swift.org/documentation/articles/swift-sdk-for-android-getting-started.html).
-The full stack — including the SwiftNIO transport — runs on every one of these, not just the
-core engine.
+The full stack — including the SwiftNIO transport — builds on every one of these, not just the
+core engine, and the HTTP integration tests (a real server driven over real sockets) run on all
+five.
+
+One caveat, stated plainly: the **WebSocket** integration tests run on macOS and iOS only. They
+drive the server with `URLSessionWebSocketTask`, which swift-corelibs-foundation does not yet
+provide in a usable form elsewhere. The `graphql-transport-ws` handler itself is
+platform-independent SwiftNIO code, and its message reassembly, operation bookkeeping, and the
+subscription engine behind it are unit-tested on every platform — but an end-to-end subscription
+round trip is exercised by CI on Apple platforms alone.
 
 The Apple OS minimums exist only to satisfy Swift concurrency availability on Apple targets —
 they don't limit support elsewhere. MockQL is built with strict Swift concurrency: no

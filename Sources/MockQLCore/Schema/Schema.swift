@@ -5,8 +5,11 @@
 public struct Schema: Sendable {
     /// An argument on a field, or a field of an input object type.
     public struct Argument: Sendable, Hashable {
+        /// The argument (or input field) name.
         public let name: String
+        /// The declared input type.
         public let type: TypeReference
+        /// The value used when the argument is omitted, or `nil` when it declares no default.
         public let defaultValue: GraphQLValue?
 
         /// Creates an argument definition.
@@ -19,8 +22,11 @@ public struct Schema: Sendable {
 
     /// A field on an object or interface type.
     public struct Field: Sendable, Hashable {
+        /// The field name.
         public let name: String
+        /// The declared return type.
         public let type: TypeReference
+        /// The arguments the field accepts, in declaration order.
         public let arguments: [Argument]
 
         /// Creates a field definition.
@@ -38,8 +44,11 @@ public struct Schema: Sendable {
 
     /// An object type: named fields, optionally implementing interfaces.
     public struct ObjectType: Sendable, Hashable {
+        /// The type name.
         public let name: String
+        /// The names of the interfaces this type implements.
         public let interfaces: [String]
+        /// The fields the type declares, in declaration order.
         public let fields: [Field]
         private let fieldIndex: [String: Int]
 
@@ -62,7 +71,9 @@ public struct Schema: Sendable {
 
     /// An interface type.
     public struct InterfaceType: Sendable, Hashable {
+        /// The interface name.
         public let name: String
+        /// The fields every implementing type must provide, in declaration order.
         public let fields: [Field]
 
         /// Creates an interface type.
@@ -74,7 +85,9 @@ public struct Schema: Sendable {
 
     /// A union type.
     public struct UnionType: Sendable, Hashable {
+        /// The union name.
         public let name: String
+        /// The names of the object types the union can resolve to.
         public let members: [String]
 
         /// Creates a union type.
@@ -86,7 +99,9 @@ public struct Schema: Sendable {
 
     /// An enum type.
     public struct EnumType: Sendable, Hashable {
+        /// The enum name.
         public let name: String
+        /// The enum's value names, in declaration order.
         public let values: [String]
 
         /// Creates an enum type.
@@ -98,7 +113,9 @@ public struct Schema: Sendable {
 
     /// An input object type.
     public struct InputObjectType: Sendable, Hashable {
+        /// The input type name.
         public let name: String
+        /// The input fields, in declaration order. A field's `defaultValue` applies when it is omitted.
         public let fields: [Argument]
 
         /// Creates an input object type.
@@ -110,7 +127,10 @@ public struct Schema: Sendable {
 
     /// A scalar type — one of the five built-ins or a custom scalar from the schema.
     public struct ScalarType: Sendable, Hashable {
+        /// The scalar name.
         public let name: String
+        /// `true` for `Int`, `Float`, `String`, `Boolean`, and `ID`; `false` for a custom scalar, whose
+        /// values pass through coercion unchanged.
         public let isBuiltIn: Bool
 
         /// Creates a scalar type.
@@ -122,11 +142,17 @@ public struct Schema: Sendable {
 
     /// Any named type in the schema.
     public enum NamedType: Sendable, Hashable {
+        /// An object type.
         case object(ObjectType)
+        /// An interface type.
         case interface(InterfaceType)
+        /// A union type.
         case union(UnionType)
+        /// An enum type.
         case enumType(EnumType)
+        /// An input object type.
         case inputObject(InputObjectType)
+        /// A built-in or custom scalar type.
         case scalar(ScalarType)
 
         /// The type's name.
@@ -156,8 +182,13 @@ public struct Schema: Sendable {
 
     /// All named types, keyed by name. Includes the built-in scalars.
     public let types: [String: NamedType]
+    /// The root query type.
+    ///
+    /// Resolved once, when the schema is built: a schema whose query root is missing or is not
+    /// an object type fails to load, so this is always the real type and never a stand-in.
+    public let queryType: ObjectType
     /// The name of the root query type.
-    public let queryTypeName: String
+    public var queryTypeName: String { queryType.name }
     /// The name of the root mutation type, when the schema defines one.
     public let mutationTypeName: String?
     /// The name of the root subscription type, when the schema defines one.
@@ -177,12 +208,6 @@ public struct Schema: Sendable {
     public func objectType(named name: String) -> ObjectType? {
         if case .object(let type) = types[name] { return type }
         return nil
-    }
-
-    /// The root query type.
-    public var queryType: ObjectType {
-        // Validated at construction; a missing root query type cannot survive init.
-        objectType(named: queryTypeName) ?? ObjectType(name: queryTypeName, fields: [])
     }
 
     /// The concrete object types a given output type name can resolve to: itself for objects,
@@ -229,12 +254,12 @@ public struct Schema: Sendable {
 
     init(
         types: [String: NamedType],
-        queryTypeName: String,
+        queryType: ObjectType,
         mutationTypeName: String?,
         subscriptionTypeName: String?
     ) {
         self.types = types
-        self.queryTypeName = queryTypeName
+        self.queryType = queryType
         self.mutationTypeName = mutationTypeName
         self.subscriptionTypeName = subscriptionTypeName
     }

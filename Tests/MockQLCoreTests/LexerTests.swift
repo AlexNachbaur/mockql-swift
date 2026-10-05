@@ -56,6 +56,55 @@ import Testing
         #expect(throws: MockQLError.self) { try Lexer.tokenize(#""\uZZZZ""#) }
     }
 
+    @Test func surrogatePairEscapeDecodesToOneScalar() throws {
+        #expect(try kinds(#""\uD83D\uDE00""#) == [.stringValue("😀"), .endOfFile])
+        #expect(try kinds(#""a\ud83d\ude00b""#) == [.stringValue("a😀b"), .endOfFile])
+    }
+
+    @Test func bracedUnicodeEscapeDecodes() throws {
+        #expect(try kinds(#""\u{1F600}""#) == [.stringValue("😀"), .endOfFile])
+        #expect(try kinds(#""\u{41}\u{e9}""#) == [.stringValue("Aé"), .endOfFile])
+    }
+
+    @Test func malformedUnicodeEscapesAreRejectedWithAReason() {
+        func message(_ source: String) -> String? {
+            do {
+                _ = try Lexer.tokenize(source)
+                return nil
+            } catch {
+                return (error as? MockQLError)?.message
+            }
+        }
+        // A leading surrogate with nothing to pair with, and one paired with a non-surrogate.
+        #expect(message(#""\uD83D""#)?.contains("must be followed by a trailing surrogate") == true)
+        #expect(message(#""\uD83D\u0041""#)?.contains("is not a trailing surrogate") == true)
+        // A trailing surrogate on its own.
+        #expect(message(#""\uDE00""#) == #"Invalid unicode escape '\uDE00' in string"#)
+        // Braced form: empty, unclosed, and beyond the last code point.
+        #expect(message(#""\u{}""#)?.contains("expected hex digits and a closing '}'") == true)
+        #expect(message(#""\u{41""#)?.contains("expected hex digits and a closing '}'") == true)
+        #expect(message(#""\u{110000}""#) == #"Invalid unicode escape '\u{110000}' in string"#)
+    }
+
+    @Test func combiningMarkAfterAQuoteStaysInsideTheString() throws {
+        // U+0301 clusters with the quote before it into one grapheme; the lexer must still see
+        // the quote.
+        #expect(try kinds("\"\u{301}x\"") == [.stringValue("\u{301}x"), .endOfFile])
+        #expect(try kinds("\"x\"\u{FEFF}") == [.stringValue("x"), .endOfFile])
+    }
+
+    @Test func namesAreASCIIOnly() {
+        // "b" + U+0301 has no precomposed form, so as a grapheme it sorts between "a" and "z".
+        #expect(throws: MockQLError.self) { try Lexer.tokenize("{ b\u{301} }") }
+        #expect(throws: MockQLError.self) { try Lexer.tokenize("{ é }") }
+    }
+
+    @Test func columnsCountScalarsAfterNonASCIIText() throws {
+        // "e" + U+0301 is one grapheme but two scalars, so `name` starts at column 6, not 5.
+        let tokens = try Lexer.tokenize("\"e\u{301}\" name")
+        #expect(tokens[1].location == SourceLocation(line: 1, column: 6))
+    }
+
     @Test func dedentsBlockStrings() throws {
         let source = "\"\"\"\n    Hello,\n      World!\n    \"\"\""
         #expect(try kinds(source) == [.stringValue("Hello,\n  World!"), .endOfFile])

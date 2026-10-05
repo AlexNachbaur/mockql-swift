@@ -28,7 +28,7 @@ struct SchemaAssembler {
         let roots = try rootTypeNames(document: document, types: types)
         let schema = Schema(
             types: types,
-            queryTypeName: roots.query,
+            queryType: try rootType(roots.query, role: "query", in: types),
             mutationTypeName: roots.mutation,
             subscriptionTypeName: roots.subscription
         )
@@ -96,25 +96,32 @@ struct SchemaAssembler {
     // MARK: - Validation
 
     private func validate(_ schema: Schema, document: SchemaDocument) throws {
-        try validateRootType(schema.queryTypeName, role: "query", in: schema)
+        // The query root was resolved while building the schema; see `assemble(_:)`.
         if let mutation = schema.mutationTypeName {
-            try validateRootType(mutation, role: "mutation", in: schema)
+            _ = try rootType(mutation, role: "mutation", in: schema.types)
         }
         if let subscription = schema.subscriptionTypeName {
-            try validateRootType(subscription, role: "subscription", in: schema)
+            _ = try rootType(subscription, role: "subscription", in: schema.types)
         }
         for definition in document.typeDefinitions {
             try validateDefinition(definition, in: schema)
         }
     }
 
-    private func validateRootType(_ name: String, role: String, in schema: Schema) throws {
-        guard let type = schema.type(named: name) else {
-            throw error("The \(role) root type '\(name)' is not defined\(suggestion(for: name, in: schema))")
+    /// The object type serving as a root operation type, or an error saying why `name` can't be.
+    private func rootType(
+        _ name: String,
+        role: String,
+        in types: [String: Schema.NamedType]
+    ) throws -> Schema.ObjectType {
+        guard let type = types[name] else {
+            let clause = Suggestion.clause(for: name, in: types.keys)
+            throw error("The \(role) root type '\(name)' is not defined\(clause)")
         }
-        guard case .object = type else {
+        guard case .object(let object) = type else {
             throw error("The \(role) root type '\(name)' must be an object type, not \(article(type.kindDescription))")
         }
+        return object
     }
 
     private func validateDefinition(_ definition: TypeDefinitionNode, in schema: Schema) throws {
@@ -128,13 +135,14 @@ struct SchemaAssembler {
                         at: location
                     )
                 }
-                guard case .interface = interface else {
+                guard case .interface(let interfaceType) = interface else {
                     throw error(
                         "Type '\(name)' implements '\(interfaceName)', which is \(article(interface.kindDescription)), "
                             + "not an interface",
                         at: location
                     )
                 }
+                try validateConformance(of: name, fields: fields, to: interfaceType, in: schema, at: location)
             }
             try validateFields(fields, ownerName: name, in: schema)
         case .interface(let name, _, let fields, _, _):
@@ -162,6 +170,11 @@ struct SchemaAssembler {
                     context: "Field '\(field.name)' of input type '\(name)'",
                     in: schema,
                     at: location
+                )
+                try validateDefaultValue(
+                    of: field,
+                    context: "the default value of field '\(field.name)' of input type '\(name)'",
+                    in: schema
                 )
             }
         case .enumType, .scalar:
@@ -192,7 +205,110 @@ struct SchemaAssembler {
                     in: schema,
                     at: argument.location
                 )
+                try validateDefaultValue(
+                    of: argument,
+                    context: "the default value of argument '\(argument.name)' of '\(ownerName).\(field.name)'",
+                    in: schema
+                )
             }
+        }
+    }
+
+    /// Checks a declared default against the type it defaults, by running it through the same
+    /// coercion a client-supplied value gets. A default that could never be supplied by a client
+    /// (`limit: Int = "ten"`, an enum value that doesn't exist) would otherwise load quietly and
+    /// then fail every request that relies on it.
+    private func validateDefaultValue(
+        of node: InputValueDefinitionNode,
+        context: String,
+        in schema: Schema
+    ) throws {
+        guard let defaultValue = try node.defaultValue?.constantValue() else { return }
+        do {
+            _ = try InputCoercion(schema: schema).coerce(
+                defaultValue,
+                to: node.type,
+                context: context,
+                location: node.location
+            )
+        } catch let coercionError as GraphQLError {
+            throw error(coercionError.message, at: node.location)
+        }
+    }
+
+    /// Checks that an object type really provides what an interface it claims to implement
+    /// declares: every field, with a compatible type and the same arguments. Queries reach the
+    /// object's fields through the interface, so a gap here is a field that resolves on one
+    /// implementor and is an "unknown field" error on another.
+    private func validateConformance(
+        of objectName: String,
+        fields: [FieldDefinitionNode],
+        to interface: Schema.InterfaceType,
+        in schema: Schema,
+        at location: SourceLocation
+    ) throws {
+        for required in interface.fields {
+            guard let field = fields.first(where: { $0.name == required.name }) else {
+                throw error(
+                    "Type '\(objectName)' implements '\(interface.name)' but does not define its field "
+                        + "'\(required.name): \(required.type)'",
+                    at: location
+                )
+            }
+            guard isSubtype(field.type, of: required.type, in: schema) else {
+                throw error(
+                    "Field '\(objectName).\(field.name)' has type '\(field.type)', which is not compatible with "
+                        + "'\(required.type)' declared by interface '\(interface.name)'",
+                    at: field.location
+                )
+            }
+            for requiredArgument in required.arguments {
+                guard let argument = field.arguments.first(where: { $0.name == requiredArgument.name }) else {
+                    throw error(
+                        "Field '\(objectName).\(field.name)' is missing argument "
+                            + "'\(requiredArgument.name): \(requiredArgument.type)' declared by interface "
+                            + "'\(interface.name)'",
+                        at: field.location
+                    )
+                }
+                guard argument.type == requiredArgument.type else {
+                    throw error(
+                        "Argument '\(argument.name)' of '\(objectName).\(field.name)' has type '\(argument.type)', "
+                            + "but interface '\(interface.name)' declares it as '\(requiredArgument.type)'",
+                        at: argument.location
+                    )
+                }
+            }
+            // An argument the interface doesn't know about can't be supplied through it, so it
+            // has to be optional.
+            let requiredNames = Set(required.arguments.map(\.name))
+            for argument in field.arguments where !requiredNames.contains(argument.name) {
+                guard !argument.type.isNonNull || argument.defaultValue != nil else {
+                    throw error(
+                        "Argument '\(argument.name)' of '\(objectName).\(field.name)' is required, but interface "
+                            + "'\(interface.name)' does not declare it; make it nullable or give it a default",
+                        at: argument.location
+                    )
+                }
+            }
+        }
+    }
+
+    /// Whether a field of type `type` may stand in where `expected` is declared (covariance).
+    private func isSubtype(_ type: TypeReference, of expected: TypeReference, in schema: Schema) -> Bool {
+        switch (type, expected) {
+        case (.nonNull(let inner), .nonNull(let expectedInner)):
+            return isSubtype(inner, of: expectedInner, in: schema)
+        case (.nonNull(let inner), _):
+            return isSubtype(inner, of: expected, in: schema)
+        case (_, .nonNull):
+            return false
+        case (.list(let element), .list(let expectedElement)):
+            return isSubtype(element, of: expectedElement, in: schema)
+        case (.list, _), (_, .list):
+            return false
+        case (.named(let name), .named(let expectedName)):
+            return name == expectedName || schema.possibleTypeNames(for: expectedName).contains(name)
         }
     }
 

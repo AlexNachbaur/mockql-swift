@@ -96,6 +96,129 @@ import Testing
         }
     }
 
+    private func schemaError(_ sdl: String) -> MockQLError? {
+        do {
+            _ = try Schema(sdl: sdl)
+            return nil
+        } catch {
+            return error as? MockQLError
+        }
+    }
+
+    @Test func queryTypeIsTheDeclaredRootType() throws {
+        let schema = try Schema(sdl: "schema { query: Root } type Root { ping: Boolean }")
+        #expect(schema.queryType.name == "Root")
+        #expect(schema.queryType.field(named: "ping") != nil)
+        #expect(schema.queryTypeName == "Root")
+    }
+
+    @Test func rejectsANonObjectQueryRoot() {
+        let error = schemaError("schema { query: Root } enum Root { A }")
+        #expect(error?.message == "The query root type 'Root' must be an object type, not an enum")
+        let missing = schemaError("schema { query: Rot } type Root { a: Int }")
+        #expect(missing?.message.contains("The query root type 'Rot' is not defined") == true)
+        #expect(missing?.message.contains("Did you mean 'Root'?") == true)
+    }
+
+    @Test func rejectsATypeMissingAnInterfaceField() {
+        let error = schemaError(
+            """
+            type Query { node: Node }
+            interface Node { id: ID! label: String }
+            type User implements Node { id: ID! }
+            """
+        )
+        #expect(error?.category == .schema)
+        #expect(
+            error?.message == "Type 'User' implements 'Node' but does not define its field 'label: String'"
+        )
+        #expect(error?.location?.line == 3)
+    }
+
+    @Test func rejectsAnIncompatibleInterfaceFieldType() {
+        let error = schemaError(
+            """
+            type Query { node: Node }
+            interface Node { id: ID! }
+            type User implements Node { id: Int }
+            """
+        )
+        #expect(
+            error?.message
+                == "Field 'User.id' has type 'Int', which is not compatible with 'ID!' declared by interface 'Node'"
+        )
+    }
+
+    @Test func acceptsCovariantInterfaceFieldTypes() throws {
+        // Non-null where the interface is nullable, and an implementor where it names an interface.
+        _ = try Schema(
+            sdl: """
+                type Query { node: Node }
+                interface Node { id: ID parent: Node children: [Node] }
+                type User implements Node { id: ID! parent: User! children: [User!]! }
+                """
+        )
+    }
+
+    @Test func rejectsMismatchedInterfaceFieldArguments() {
+        let missing = schemaError(
+            """
+            type Query { a: Int }
+            interface Paged { items(first: Int): [Int] }
+            type Feed implements Paged { items: [Int] }
+            """
+        )
+        #expect(missing?.message.contains("Field 'Feed.items' is missing argument 'first: Int'") == true)
+
+        let retyped = schemaError(
+            """
+            type Query { a: Int }
+            interface Paged { items(first: Int): [Int] }
+            type Feed implements Paged { items(first: String): [Int] }
+            """
+        )
+        #expect(retyped?.message.contains("has type 'String', but interface 'Paged' declares it as 'Int'") == true)
+
+        let extraRequired = schemaError(
+            """
+            type Query { a: Int }
+            interface Paged { items: [Int] }
+            type Feed implements Paged { items(scope: String!): [Int] }
+            """
+        )
+        #expect(extraRequired?.message.contains("Argument 'scope' of 'Feed.items' is required") == true)
+    }
+
+    @Test func rejectsDefaultValuesOfTheWrongType() {
+        let argument = schemaError(#"type Query { items(first: Int = "ten"): [Int] }"#)
+        #expect(argument?.category == .schema)
+        #expect(
+            argument?.message
+                == #"Expected Int for the default value of argument 'first' of 'Query.items', found "ten""#
+        )
+        #expect(argument?.location != nil)
+
+        let enumDefault = schemaError("type Query { items(sort: Sort = UPP): [Int] } enum Sort { UP DOWN }")
+        #expect(enumDefault?.message.contains("'UPP' is not a value of enum 'Sort'") == true)
+        #expect(enumDefault?.message.contains("Did you mean 'UP'?") == true)
+
+        let inputField = schemaError("type Query { a(f: Filter): Int } input Filter { limit: Int! = null }")
+        #expect(inputField?.message.contains("the default value of field 'limit' of input type 'Filter'") == true)
+    }
+
+    @Test func acceptsWellTypedDefaultValues() throws {
+        let schema = try Schema(
+            sdl: """
+                type Query {
+                    items(first: Int = 10, sort: Sort = UP, ids: [ID!] = [1, "b"], f: Filter = { limit: 2 }): [Int]
+                }
+                enum Sort { UP DOWN }
+                input Filter { limit: Int = 5 ratio: Float = 1 }
+                """
+        )
+        #expect(schema.queryType.field(named: "items")?.argument(named: "first")?.defaultValue == .int(10))
+    }
+
     @Test func rejectsInvalidTypeRelationships() {
         // Union member that is an enum.
         #expect(throws: MockQLError.self) {

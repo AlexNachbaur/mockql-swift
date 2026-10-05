@@ -4,7 +4,11 @@ import NIOCore
 import NIOWebSocket
 
 /// Speaks the `graphql-transport-ws` subprotocol over an upgraded WebSocket connection:
-/// `connection_init`/`connection_ack`, `subscribe`/`next`/`complete`, and `ping`/`pong`.
+/// `connection_init`/`connection_ack`, `subscribe`/`next`/`error`/`complete`, and `ping`/`pong`.
+///
+/// `subscribe` carries any operation, as the protocol allows: a subscription streams `next`
+/// messages until it ends, while a query or mutation produces a single `next` and then
+/// `complete`.
 ///
 /// `@unchecked Sendable`: mutable state is confined to the channel's event loop, per NIO's
 /// channel-handler threading model.
@@ -14,8 +18,8 @@ final class GraphQLWSHandler: ChannelInboundHandler, @unchecked Sendable {
 
     private let engine: MockQLEngine
     private var acknowledged = false
-    private var fragmentedText: String?
-    private var subscriptionTasks: [String: Task<Void, Never>] = [:]
+    private var assembler = TextMessageAssembler()
+    private var operations = OperationRegistry()
 
     init(engine: MockQLEngine) {
         self.engine = engine
@@ -24,19 +28,16 @@ final class GraphQLWSHandler: ChannelInboundHandler, @unchecked Sendable {
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let frame = unwrapInboundIn(data)
         switch frame.opcode {
-        case .text:
-            let text = frame.unmaskedData.getString(at: 0, length: frame.unmaskedData.readableBytes) ?? ""
-            if frame.fin {
+        case .text, .continuation:
+            var payload = frame.unmaskedData
+            let bytes = payload.readBytes(length: payload.readableBytes) ?? []
+            switch assembler.append(bytes, startsMessage: frame.opcode == .text, isFinal: frame.fin) {
+            case .incomplete:
+                break
+            case .message(let text):
                 handleMessage(text, context: context)
-            } else {
-                fragmentedText = text
-            }
-        case .continuation:
-            let text = frame.unmaskedData.getString(at: 0, length: frame.unmaskedData.readableBytes) ?? ""
-            fragmentedText = (fragmentedText ?? "") + text
-            if frame.fin, let complete = fragmentedText {
-                fragmentedText = nil
-                handleMessage(complete, context: context)
+            case .invalidUTF8:
+                close(context: context, code: 1007, reason: "Text message is not valid UTF-8")
             }
         case .ping:
             var pong = frame
@@ -56,10 +57,7 @@ final class GraphQLWSHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     private func cancelAllSubscriptions() {
-        for task in subscriptionTasks.values {
-            task.cancel()
-        }
-        subscriptionTasks.removeAll()
+        operations.cancelAll()
     }
 
     // MARK: - Protocol messages
@@ -85,8 +83,7 @@ final class GraphQLWSHandler: ChannelInboundHandler, @unchecked Sendable {
             handleSubscribe(message, context: context)
         case "complete":
             if let id = message["id"].stringValue {
-                subscriptionTasks[id]?.cancel()
-                subscriptionTasks[id] = nil
+                operations.cancel(id: id)
             }
         default:
             close(context: context, code: 4400, reason: "Unknown message type '\(type)'")
@@ -102,7 +99,7 @@ final class GraphQLWSHandler: ChannelInboundHandler, @unchecked Sendable {
             close(context: context, code: 4400, reason: "subscribe requires an 'id'")
             return
         }
-        guard subscriptionTasks[id] == nil else {
+        guard !operations.contains(id) else {
             close(context: context, code: 4409, reason: "Subscriber for \(id) already exists")
             return
         }
@@ -118,32 +115,63 @@ final class GraphQLWSHandler: ChannelInboundHandler, @unchecked Sendable {
         let engine = self.engine
         let channel = context.channel
         let handlerReference = NIOLoopBound(self, eventLoop: context.eventLoop)
+        let token = operations.makeToken()
         let task = Task {
-            await Self.runSubscription(engine: engine, request: request, id: id, channel: channel)
+            await Self.runOperation(engine: engine, request: request, id: id, channel: channel)
             channel.eventLoop.execute {
-                handlerReference.value.subscriptionTasks[id] = nil
+                // Token-checked: by now the client may have completed this operation and started
+                // another under the same id, which this cleanup must leave alone.
+                handlerReference.value.operations.finish(id: id, token: token)
             }
         }
-        subscriptionTasks[id] = task
+        operations.insert(task, id: id, token: token)
     }
 
-    private static func runSubscription(
+    private static func runOperation(
         engine: MockQLEngine,
         request: GraphQLRequest,
         id: String,
         channel: Channel
     ) async {
+        guard engine.operationType(of: request) == .subscription else {
+            await runSingleResultOperation(engine: engine, request: request, id: id, channel: channel)
+            return
+        }
         do {
             let stream = try await engine.subscribe(request)
-            for await event in stream {
+            for await event in stream where !Task.isCancelled {
                 sendEvent(type: "next", id: id, payload: event.responseValue, channel: channel)
             }
         } catch let error as GraphQLError {
+            // `error` is terminal: it ends the operation, and no `complete` follows it.
             sendEvent(type: "error", id: id, payload: .list([error.responseValue]), channel: channel)
+            return
         } catch {
             let fallback = GraphQLError(message: String(describing: error))
             sendEvent(type: "error", id: id, payload: .list([fallback.responseValue]), channel: channel)
+            return
         }
+        // Cancelled means the client completed the operation itself (or the socket closed);
+        // answering with `complete` would be addressed to an id it may already have reused.
+        guard !Task.isCancelled else { return }
+        sendEvent(type: "complete", id: id, payload: nil, channel: channel)
+    }
+
+    /// Runs a query or mutation sent over the socket: one `next` carrying the result, then
+    /// `complete` — or a lone `error` when the request failed before execution began.
+    private static func runSingleResultOperation(
+        engine: MockQLEngine,
+        request: GraphQLRequest,
+        id: String,
+        channel: Channel
+    ) async {
+        let response = await engine.execute(request)
+        guard !Task.isCancelled else { return }
+        guard response.data != nil else {
+            sendEvent(type: "error", id: id, payload: .list(response.errors.map(\.responseValue)), channel: channel)
+            return
+        }
+        sendEvent(type: "next", id: id, payload: response.responseValue, channel: channel)
         sendEvent(type: "complete", id: id, payload: nil, channel: channel)
     }
 

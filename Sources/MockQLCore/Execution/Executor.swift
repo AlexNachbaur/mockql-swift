@@ -9,6 +9,9 @@ struct Executor {
     let data: StoreData
     let fragments: [String: FragmentDefinitionNode]
     let variables: [String: GraphQLValue]
+    /// The names of every variable the operation declares. A declared variable with no entry in
+    /// ``variables`` was legitimately left out by the client; an undeclared one is an error.
+    let declaredVariables: Set<String>
     /// Custom connection/list filters, keyed `"Type.field"` (overrides the argument-name
     /// convention for that field).
     let filters: [String: FieldFilter]
@@ -33,6 +36,7 @@ struct Executor {
         data: StoreData,
         fragments: [String: FragmentDefinitionNode],
         variables: [String: GraphQLValue],
+        declaredVariables: Set<String> = [],
         filters: [String: FieldFilter] = [:],
         resolvers: [String: FieldResolver] = [:],
         diagnosticsEnabled: Bool = false
@@ -43,6 +47,7 @@ struct Executor {
         self.data = data
         self.fragments = fragments
         self.variables = variables
+        self.declaredVariables = declaredVariables
         self.filters = filters
         self.resolvers = resolvers
     }
@@ -59,33 +64,70 @@ struct Executor {
         )
         do {
             return .object(try resolveSelectionSet(selections, on: source, path: []))
+        } catch let error as GraphQLError {
+            // A request-level failure raised while collecting fields (an unknown fragment, a
+            // malformed `@skip`/`@include`, an undeclared variable). It must reach the client:
+            // `data: null` with no `errors` is indistinguishable from a legitimately empty result.
+            errors.append(error)
+            return .null
         } catch {
+            // A `NullViolation` that bubbled all the way to the root; already reported.
             return .null
         }
     }
 
     /// Resolves one root field's selections against an already-computed value (a mutation
     /// handler's result or a subscription payload).
+    ///
+    /// - Parameters:
+    ///   - parentTypeName: The root operation type that owns the field (`Mutation`,
+    ///     `Subscription`), so diagnostics and `"Type.field"` hook keys name the real owner.
+    ///   - arguments: The field's coerced arguments, so pagination and a registered ``Filter``
+    ///     see them. The argument-name filter *convention* is deliberately not applied to the
+    ///     root value: a handler already received the arguments and returned exactly what it
+    ///     meant to.
     mutating func resolveValue(
         _ value: GraphQLValue,
         ofType type: TypeReference,
         selections: [SelectionNode],
         fieldName: String,
+        parentTypeName: String,
+        arguments: GraphQLValue,
         path: [GraphQLPathSegment]
     ) -> GraphQLValue {
+        let parent = ResolutionSource(
+            typeName: parentTypeName,
+            fields: [:],
+            recordID: "root",
+            isRoot: true,
+            appliesFilterConvention: false
+        )
         do {
             return try complete(
                 raw: value,
                 type: type,
                 fieldName: fieldName,
-                parent: ResolutionSource(typeName: schema.queryTypeName, fields: [:], recordID: "root", isRoot: true),
-                arguments: .object([:]),
+                parent: parent,
+                arguments: arguments,
                 selections: selections,
                 path: path
             )
+        } catch let error as GraphQLError {
+            errors.append(error)
+            return .null
         } catch {
             return .null
         }
+    }
+
+    /// Collects a mutation or subscription operation's root fields, expanding fragments and
+    /// honoring `@skip`/`@include` exactly as a query's selection set does. Fields sharing a
+    /// response key come back grouped, so the caller resolves each key once.
+    mutating func collectRootFields(
+        _ selections: [SelectionNode],
+        typeName: String
+    ) throws -> [(key: String, nodes: [FieldNode])] {
+        try collectFields(selections, concreteTypeName: typeName)
     }
 
     // MARK: - Selection sets
@@ -96,6 +138,9 @@ struct Executor {
         let fields: [String: GraphQLValue]
         let recordID: String?
         var isRoot = false
+        /// Whether list/connection fields resolved on this source filter by the argument-name
+        /// convention. Off for a value a mutation handler or `publish` supplied.
+        var appliesFilterConvention = true
     }
 
     private mutating func resolveSelectionSet(
@@ -188,7 +233,7 @@ struct Executor {
                 throw requestError("@\(directive.name) requires an 'if' argument", at: directive.location)
             }
             let value = try resolveArgumentValue(condition, at: directive.location)
-            guard let flag = value.boolValue else {
+            guard let flag = value?.boolValue else {
                 throw requestError("@\(directive.name)(if:) must be a Boolean", at: directive.location)
             }
             if directive.name == "skip" && flag { return false }
@@ -270,7 +315,11 @@ struct Executor {
         path: [GraphQLPathSegment]
     ) throws -> GraphQLValue {
         if case .nonNull(let inner) = type {
-            let value = try complete(
+            // `completeNullable`, not `complete`: a violation thrown by a child was reported where
+            // it happened and must pass straight through. Absorbing it here and re-reporting gave
+            // one null two or three errors (`[Item!]!` reported the element, then the list).
+            let errorCountBefore = errors.count
+            let value = try completeNullable(
                 raw: raw,
                 type: inner,
                 fieldName: fieldName,
@@ -280,13 +329,18 @@ struct Executor {
                 path: path
             )
             if value.isNull {
-                errors.append(
-                    GraphQLError(
-                        message: "Cannot return null for non-nullable field '\(parent.typeName).\(fieldName)'",
-                        path: path,
-                        extensions: ["code": .string("NULL_VIOLATION")]
+                // An error recorded while completing this very value (a dangling reference, a bad
+                // pagination argument) already explains the null; only an unexplained null needs
+                // the violation spelled out.
+                if errors.count == errorCountBefore {
+                    errors.append(
+                        GraphQLError(
+                            message: nullViolationMessage(parent: parent, fieldName: fieldName, path: path),
+                            path: path,
+                            extensions: ["code": .string("NULL_VIOLATION")]
+                        )
                     )
-                )
+                }
                 throw NullViolation()
             }
             return value
@@ -305,6 +359,20 @@ struct Executor {
             // A non-null child failed; this nullable position absorbs the bubble.
             return .null
         }
+    }
+
+    /// Names what was null: the field itself, or — when the path ends in an index — one element
+    /// of its list, which is a different fix for whoever reads the message.
+    private func nullViolationMessage(
+        parent: ResolutionSource,
+        fieldName: String,
+        path: [GraphQLPathSegment]
+    ) -> String {
+        if case .index(let index) = path.last {
+            return "Cannot return null for non-nullable element \(index) of list field "
+                + "'\(parent.typeName).\(fieldName)'"
+        }
+        return "Cannot return null for non-nullable field '\(parent.typeName).\(fieldName)'"
     }
 
     private mutating func completeNullable(
@@ -351,7 +419,8 @@ struct Executor {
                     elements,
                     fieldKey: "\(parent.typeName).\(fieldName)",
                     nodeTypeName: elementTypeName,
-                    arguments: arguments
+                    arguments: arguments,
+                    applyConvention: parent.appliesFilterConvention
                 )
             }
             var completed: [GraphQLValue] = []
@@ -405,9 +474,18 @@ struct Executor {
                     nodes,
                     fieldKey: "\(parent.typeName).\(fieldName)",
                     nodeTypeName: connection.nodeTypeName,
-                    arguments: arguments
+                    arguments: arguments,
+                    applyConvention: parent.appliesFilterConvention
                 )
-                let synthesized = synthesizeConnection(nodes: filtered, info: connection, arguments: arguments)
+                guard
+                    let synthesized = synthesizeConnection(
+                        nodes: filtered,
+                        info: connection,
+                        arguments: arguments,
+                        fieldKey: "\(parent.typeName).\(fieldName)",
+                        path: path
+                    )
+                else { return .null }
                 return try resolveObject(synthesized, concreteTypeName: typeName, selections: selections, path: path)
             }
             if let reference = raw.referenceValue {
@@ -508,7 +586,15 @@ struct Executor {
                 )
             case .object, .interface, .union:
                 if let connection = schema.connectionInfo(for: typeName) {
-                    let synthesized = synthesizeConnection(nodes: [], info: connection, arguments: arguments)
+                    guard
+                        let synthesized = synthesizeConnection(
+                            nodes: [],
+                            info: connection,
+                            arguments: arguments,
+                            fieldKey: "\(parent.typeName).\(fieldName)",
+                            path: path
+                        )
+                    else { return .null }
                     return try resolveObject(
                         synthesized,
                         concreteTypeName: typeName,
@@ -555,7 +641,8 @@ struct Executor {
         _ nodes: [GraphQLValue],
         fieldKey: String,
         nodeTypeName: String,
-        arguments: GraphQLValue
+        arguments: GraphQLValue,
+        applyConvention: Bool
     ) -> [GraphQLValue] {
         // A Resolve hook fully produces the field value, so neither the convention nor a Filter
         // post-filters its output.
@@ -573,7 +660,7 @@ struct Executor {
             record(fieldKey: fieldKey, seeded: nodes.count, returned: filtered.count, customFilter: true)
             return filtered
         }
-        guard let argumentFields = arguments.objectValue else { return nodes }
+        guard applyConvention, let argumentFields = arguments.objectValue else { return nodes }
         // A `null` argument means "no filter", matching how real GraphQL servers read an unset
         // optional filter.
         //
@@ -691,31 +778,65 @@ struct Executor {
         }
     }
 
-    private func synthesizeConnection(
+    /// Builds a Relay connection from a field's (already filtered) nodes, applying the Relay
+    /// cursor-pagination algorithm: `after`/`before` narrow the window, then `first` keeps its
+    /// head and `last` its tail.
+    ///
+    /// Returns `nil` after recording an error when `first` or `last` is negative, which the Relay
+    /// specification makes an error rather than "no limit".
+    private mutating func synthesizeConnection(
         nodes: [GraphQLValue],
         info: Schema.ConnectionInfo,
-        arguments: GraphQLValue
-    ) -> GraphQLValue {
-        var start = 0
-        if let after = arguments["after"].stringValue, let index = cursorIndex(after) {
-            start = index + 1
+        arguments: GraphQLValue,
+        fieldKey: String,
+        path: [GraphQLPathSegment]
+    ) -> GraphQLValue? {
+        let first = arguments["first"].intValue
+        let last = arguments["last"].intValue
+        for (name, limit) in [("first", first), ("last", last)] {
+            guard let limit, limit < 0 else { continue }
+            errors.append(
+                GraphQLError(
+                    message: "Argument '\(name)' of '\(fieldKey)' must be a non-negative integer, found \(limit)",
+                    path: path,
+                    extensions: ["code": .string("BAD_INPUT")]
+                )
+            )
+            return nil
         }
-        var slice = start < nodes.count ? Array(nodes[start...]) : []
-        var hasNextPage = false
-        if let first = arguments["first"].intValue, first >= 0, slice.count > first {
-            slice = Array(slice.prefix(first))
+
+        // The window is `start..<end`, in indices into `nodes`. Cursors that don't parse are
+        // ignored, as before; ones that point outside the list clamp to it.
+        var start = 0
+        var end = nodes.count
+        if let after = arguments["after"].stringValue, let index = cursorIndex(after) {
+            start = min(max(index + 1, 0), nodes.count)
+        }
+        if let before = arguments["before"].stringValue, let index = cursorIndex(before) {
+            end = min(max(index, 0), nodes.count)
+        }
+        end = max(end, start)
+        var hasPreviousPage = start > 0
+        var hasNextPage = end < nodes.count
+        if let first, end - start > first {
+            end = start + first
             hasNextPage = true
         }
-        let edges = slice.enumerated().map { offset, node -> GraphQLValue in
-            .object(["cursor": .string(cursor(at: start + offset)), "node": node])
+        if let last, end - start > last {
+            start = end - last
+            hasPreviousPage = true
+        }
+
+        let edges = (start..<end).map { index -> GraphQLValue in
+            .object(["cursor": .string(cursor(at: index)), "node": nodes[index]])
         }
         var connection: [String: GraphQLValue] = [
             "edges": .list(edges),
             "pageInfo": .object([
                 "hasNextPage": .bool(hasNextPage),
-                "hasPreviousPage": .bool(start > 0),
-                "startCursor": slice.isEmpty ? .null : .string(cursor(at: start)),
-                "endCursor": slice.isEmpty ? .null : .string(cursor(at: start + slice.count - 1)),
+                "hasPreviousPage": .bool(hasPreviousPage),
+                "startCursor": start == end ? .null : .string(cursor(at: start)),
+                "endCursor": start == end ? .null : .string(cursor(at: end - 1)),
             ]),
         ]
         if info.hasTotalCount {
@@ -794,7 +915,11 @@ struct Executor {
     ) throws -> GraphQLValue {
         var provided: [String: GraphQLValue] = [:]
         for node in nodes {
-            provided[node.name] = try resolveArgumentValue(node.value, at: node.location)
+            // An argument fed by a declared variable the request left out is itself left out,
+            // so its default (or "absent") applies — it is not an error and not a null.
+            if let value = try resolveArgumentValue(node.value, at: node.location) {
+                provided[node.name] = value
+            }
         }
         // Fields with no declared arguments accept anything — DSL-declared mutations receive
         // their inputs without a schema-declared signature.
@@ -832,16 +957,25 @@ struct Executor {
         return .object(coerced)
     }
 
-    private func resolveArgumentValue(_ value: ASTValue, at location: SourceLocation) throws -> GraphQLValue {
+    /// Resolves a literal to a runtime value, substituting variables.
+    ///
+    /// Returns `nil` only for a variable the operation declares but the request did not supply
+    /// (and which has no default): the spec treats that as "no value", distinct from `null`.
+    /// Inside a list such a variable becomes `null`; inside an input object the field is omitted.
+    private func resolveArgumentValue(_ value: ASTValue, at location: SourceLocation) throws -> GraphQLValue? {
         switch value {
         case .variable(let name):
-            guard let provided = variables[name] else {
-                throw GraphQLError(
-                    message: "Variable '$\(name)' was not provided.\(Suggestion.clause(for: name, in: variables.keys))",
-                    locations: [location]
-                )
+            if let provided = variables[name] {
+                return provided
             }
-            return provided
+            if declaredVariables.contains(name) {
+                return nil
+            }
+            throw GraphQLError(
+                message: "Variable '$\(name)' is not declared by this operation."
+                    + Suggestion.clause(for: name, in: declaredVariables.sorted()),
+                locations: [location]
+            )
         case .int(let int):
             return .int(int)
         case .float(let double):
@@ -855,9 +989,15 @@ struct Executor {
         case .enumValue(let name):
             return .enumValue(name)
         case .list(let elements):
-            return .list(try elements.map { try resolveArgumentValue($0, at: location) })
+            return .list(try elements.map { try resolveArgumentValue($0, at: location) ?? .null })
         case .object(let fields):
-            return .object(try fields.mapValues { try resolveArgumentValue($0, at: location) })
+            var resolved: [String: GraphQLValue] = [:]
+            for (name, field) in fields {
+                if let value = try resolveArgumentValue(field, at: location) {
+                    resolved[name] = value
+                }
+            }
+            return .object(resolved)
         }
     }
 

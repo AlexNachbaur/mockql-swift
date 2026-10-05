@@ -10,17 +10,18 @@ Current documents:
 - [seed-format.md](seed-format.md) — the v1 seed document specification (`version`/`data`/`roots`,
   schema-driven references, coercion, validation).
 
-Planned areas (documents will be added as the design solidifies):
+Everything else has shipped, and is documented where its users look for it — in the DocC
+catalogs — rather than in a design document of its own:
 
-- **Server & transport** — how the local GraphQL server runs alongside UI tests, how the app
-  under test connects to it, and how the transport stays cross-platform (macOS, iOS, Linux,
-  Windows, Android).
-- **Schema definition** — loading a GraphQL schema file (SDL) and the `ResultBuilder`-based DSL
-  for declaring queries, mutations, and response shapes in Swift.
-- **Data generation** — the pluggable generator system for names, emails, phone numbers, and
-  other realistic content.
-- **State model** — how in-memory state is stored, updated by mutation closures, and kept
-  consistent across resolutions.
-- **Seeding** — loading initial state from JSON/YAML files, inline strings, or result-builder
-  initializers.
-- **Subscriptions** — hooks for publishing subscription events from test code.
+| Area | Where it is documented |
+|---|---|
+| Server & transport | `Sources/MockQL/MockQL.docc` — `GettingStarted`, `XCUITestIntegration`, `YourFirstMockedTest` |
+| Schema definition (SDL and the result-builder DSL) | `Sources/MockQLCore/MockQLCore.docc/DefiningSchemas.md` |
+| Data generation | `Sources/MockQLCore/MockQLCore.docc/GeneratingData.md` |
+| State model and mutations | `Sources/MockQLCore/MockQLCore.docc/MutationsAndState.md` |
+| Seeding | `Sources/MockQLCore/MockQLCore.docc/SeedingData.md`, with the format itself in [seed-format.md](seed-format.md) |
+| Filtering, resolvers, and query diagnostics | `Sources/MockQLCore/MockQLCore.docc/FilteringAndResolving.md` |
+| Subscriptions | `Sources/MockQLCore/MockQLCore.docc/WorkingWithSubscriptions.md` |
+
+Add a document here when a decision needs its alternatives and reasoning recorded — not to
+restate how a shipped feature is used.

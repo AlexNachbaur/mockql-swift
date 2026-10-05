@@ -121,6 +121,31 @@ import Testing
         try await server.stop()
     }
 
+    @Test func getDoesNotExecuteMutations() async throws {
+        let server = try await startShopServer()
+        var components = try #require(URLComponents(url: server.url, resolvingAgainstBaseURL: false))
+        components.queryItems = [
+            URLQueryItem(name: "query", value: #"mutation { addToCart(productId: "p1") { id } }"#)
+        ]
+        let (status, body) = try await get(try #require(components.url))
+        #expect(status == 405)
+        let parsed = try GraphQLValue.fromJSONData(body)
+        #expect(parsed["errors"][0]["message"].stringValue?.contains("must be sent with POST") == true)
+
+        // Nothing was added to the cart.
+        let (_, cart) = try await post("{ cart { items { id } } }", to: server.url)
+        #expect(cart["data"]["cart"]["items"].count == 0)
+        try await server.stop()
+    }
+
+    @Test func swallowedRequestErrorsNowReachTheClient() async throws {
+        let server = try await startShopServer()
+        let (status, body) = try await post("{ ...Missing }", to: server.url)
+        #expect(status == 200)
+        #expect(body["errors"][0]["message"].stringValue?.contains("Unknown fragment 'Missing'") == true)
+        try await server.stop()
+    }
+
     @Test func graphQLErrorsComeBackInTheResponseBody() async throws {
         let server = try await startShopServer()
         let (status, body) = try await post("{ currentUser { emial } }", to: server.url)

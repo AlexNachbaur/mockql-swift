@@ -40,12 +40,21 @@ public struct MockQLService: MockService {
         path.hasPrefix("/") ? path : "/" + path
     }
 
+    /// The service name shown in host diagnostics: `"MockQL"`.
     public var name: String { "MockQL" }
 
+    /// Whether this service answers `request`: a `POST` or `GET` on exactly ``httpPath``.
     public func claims(_ request: MockRequest) -> Bool {
         request.path == httpPath && (request.method == "POST" || request.method == "GET")
     }
 
+    /// Executes the GraphQL request carried by an HTTP request and returns the spec-format JSON
+    /// response.
+    ///
+    /// `POST` reads the standard JSON body. `GET` reads the `query`, `operationName`, and
+    /// `variables` query parameters and runs queries only: a mutation sent by `GET` is refused
+    /// with `405 Method Not Allowed` and is not executed. A body or query string that can't be
+    /// read as a GraphQL request is a `400`. GraphQL-level errors travel in the body with `200`.
     public func respond(to request: MockRequest) async -> MockResponse {
         let graphQLRequest: GraphQLRequest
         switch request.method {
@@ -61,6 +70,16 @@ public struct MockQLService: MockService {
             guard let parsed = HTTPHandler.requestFromQueryString(uri: request.uri) else {
                 return Self.errorResponse(status: 400, message: "GET \(httpPath) requires a 'query' parameter")
             }
+            // A GET must be safe to repeat, prefetch, and cache, so GraphQL over HTTP reserves it
+            // for queries. Running a mutation here would let a link preview change server state.
+            guard engine.operationType(of: parsed) != .mutation else {
+                var response = Self.errorResponse(
+                    status: 405,
+                    message: "Mutations must be sent with POST; a GET request can only run a query"
+                )
+                response.headers.append((name: "Allow", value: "POST"))
+                return response
+            }
             graphQLRequest = parsed
         }
         let result = await engine.execute(graphQLRequest)
@@ -70,6 +89,8 @@ public struct MockQLService: MockService {
         return .json(payload)
     }
 
+    /// Offers the `graphql-transport-ws` upgrade for a request on exactly ``subscriptionPath``,
+    /// and declines (`nil`) for any other path.
     public func webSocketUpgrade(for request: MockRequest) -> MockWebSocketUpgrade? {
         // Exact match: the host consults this hook independently of claims(_:), so a prefix
         // match would let MockQL preempt sibling services on paths like /graphqlx.
@@ -79,6 +100,7 @@ public struct MockQLService: MockService {
         }
     }
 
+    /// Ends every active subscription stream. Called by the host as it stops.
     public func shutdown() async {
         await engine.shutdown()
     }
@@ -96,16 +118,21 @@ public struct MockQLService: MockService {
 /// for both HTTP and the subscription WebSocket. Use ``MockQLEngine/service(httpPath:subscriptionPath:)``
 /// to serve them on different paths.
 extension MockQLEngine: MockService {
+    /// The service name shown in host diagnostics: `"MockQL"`.
     public var name: String { asDefaultService.name }
 
+    /// Whether the engine answers `request`: a `POST` or `GET` on `/graphql`.
     public func claims(_ request: MockRequest) -> Bool {
         asDefaultService.claims(request)
     }
 
+    /// Executes the GraphQL request carried by an HTTP request; see
+    /// ``MockQLService/respond(to:)`` for the status codes.
     public func respond(to request: MockRequest) async -> MockResponse {
         await asDefaultService.respond(to: request)
     }
 
+    /// Offers the `graphql-transport-ws` upgrade for a request on `/graphql`.
     public func webSocketUpgrade(for request: MockRequest) -> MockWebSocketUpgrade? {
         asDefaultService.webSocketUpgrade(for: request)
     }
