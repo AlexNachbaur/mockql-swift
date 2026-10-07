@@ -19,7 +19,9 @@ import Testing
         .appendingPathComponent("CHANGELOG.md")
     // The source tree is not present when the suite runs on a simulator or an emulator.
     guard let text = try? String(contentsOf: changelog, encoding: .utf8) else { return }
-    let released = text.split(separator: "\n").lazy
+    // Split on any newline: a Windows checkout has CRLF endings, and "\r\n" is one Character,
+    // so splitting on "\n" would never split at all.
+    let released = text.split(whereSeparator: \.isNewline).lazy
         .filter { $0.hasPrefix("## [") && !$0.hasPrefix("## [Unreleased]") }
         .compactMap { $0.dropFirst(4).split(separator: "]").first.map(String.init) }
         .first
