@@ -27,9 +27,11 @@ than "no limit".
 
 The convention, ``Filter``, and ``Resolve`` behave identically wherever a field is reached —
 from a query, inside a mutation's payload, or inside a subscription event. The one exception is
-the value a mutation handler (or `publish`) itself returns: it is passed through as given, and
-never re-filtered by the mutation's own arguments, because the handler already saw them. A
-``Filter`` registered for that field (`Filter("Mutation.archive")`) still applies.
+the root field itself: the value a mutation handler (or `publish`) returns is passed through as
+given, and never re-filtered by the mutation's own arguments, because the handler already saw
+them. A ``Filter`` registered for that field (`Filter("Mutation.archive")`) still applies, but a
+``Resolve`` on a root mutation or subscription field is rejected at startup — the handler *is*
+that field's resolver.
 
 ### Null arguments do not filter
 

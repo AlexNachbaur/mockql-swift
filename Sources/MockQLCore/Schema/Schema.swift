@@ -73,12 +73,17 @@ public struct Schema: Sendable {
     public struct InterfaceType: Sendable, Hashable {
         /// The interface name.
         public let name: String
+        /// The interfaces this interface itself implements (`interface Named implements Node`),
+        /// in declaration order. Field covariance walks these: a field declared as `Node` may
+        /// be narrowed to `Named` by an implementing type.
+        public let interfaces: [String]
         /// The fields every implementing type must provide, in declaration order.
         public let fields: [Field]
 
         /// Creates an interface type.
-        public init(name: String, fields: [Field]) {
+        public init(name: String, interfaces: [String] = [], fields: [Field]) {
             self.name = name
+            self.interfaces = interfaces
             self.fields = fields
         }
     }

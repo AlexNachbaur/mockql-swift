@@ -277,15 +277,27 @@ import Testing
                 "payload": ["query": "subscription { changed: orderStatusChanged { id } }"],
             ])
 
-            // Publish until the new subscription answers. The first thing said about "a" must be
-            // its event — not a stale `complete` left over from the operation it replaced.
+            // Publish until the new subscription answers. The first thing said about the *new*
+            // operation must be its event — not a stale `complete` left over from the one it
+            // replaced. An event for the old operation (no alias) may legitimately arrive first
+            // if a publish lands before the server has processed the `complete`; skip those.
             let publisher = Task {
                 while !Task.isCancelled {
                     try await server.publish("orderStatusChanged", payload: ["id": "order-9"])
                     try await Task.sleep(nanoseconds: 10_000_000)
                 }
             }
-            let message = try await withTimeout { try await client.receive() }
+            let message = try await withTimeout {
+                while true {
+                    let candidate = try await client.receive()
+                    let isOldOperationEvent =
+                        candidate["type"] == .string("next")
+                        && candidate["payload"]["data"]["orderStatusChanged"] != .null
+                    if !isOldOperationEvent {
+                        return candidate
+                    }
+                }
+            }
             publisher.cancel()
             #expect(message["type"] == .string("next"))
             #expect(message["id"] == .string("a"))

@@ -77,7 +77,9 @@ public struct MockQLService: MockService {
                     status: 405,
                     message: "Mutations must be sent with POST; a GET request can only run a query"
                 )
-                response.headers.append((name: "Allow", value: "POST"))
+                // `Allow` lists what the *resource* supports (RFC 9110 §10.2.1): GET for
+                // queries as well as POST — it is this operation, not the method, that is refused.
+                response.headers.append((name: "Allow", value: "GET, POST"))
                 return response
             }
             graphQLRequest = parsed

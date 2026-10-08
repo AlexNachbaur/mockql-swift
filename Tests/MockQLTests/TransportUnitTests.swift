@@ -205,13 +205,15 @@ import Testing
         let response = await service.respond(to: try getRequest("mutation { hit }"))
 
         #expect(response.status == 405)
-        #expect(response.headers.contains { $0.name == "Allow" && $0.value == "POST" })
+        #expect(response.headers.contains { $0.name == "Allow" && $0.value == "GET, POST" })
         let body = try GraphQLValue.fromJSONData(response.body)
         #expect(
             body["errors"][0]["message"]
                 == .string("Mutations must be sent with POST; a GET request can only run a query")
         )
-        #expect(body["data"].isNull)
+        // A request-level refusal omits `data` entirely (the subscript would read a missing key
+        // as `.null` too, so check the key itself).
+        #expect(body.objectValue?["data"] == nil)
         // The handler never ran.
         #expect(await store.record(type: "Counter", id: "c") == nil)
     }
@@ -265,6 +267,23 @@ import Testing
     @Test func invalidUTF8IsReportedNotRepaired() {
         var assembler = TextMessageAssembler()
         #expect(assembler.append([0x7B, 0xC3], startsMessage: true, isFinal: true) == .invalidUTF8)
+    }
+
+    @Test func continuationWithoutAStartIsAProtocolError() {
+        var assembler = TextMessageAssembler()
+        #expect(assembler.append(Array("x".utf8), startsMessage: false, isFinal: true) == .unexpectedContinuation)
+        // Still usable for a well-formed message afterwards.
+        #expect(assembler.append(Array("ok".utf8), startsMessage: true, isFinal: true) == .message("ok"))
+    }
+
+    @Test func messagesAreCappedWhileStillIncomplete() {
+        var assembler = TextMessageAssembler()
+        let chunk = [UInt8](repeating: 0x61, count: TextMessageAssembler.maxMessageSize / 2)
+        #expect(assembler.append(chunk, startsMessage: true, isFinal: false) == .incomplete)
+        #expect(assembler.append(chunk, startsMessage: false, isFinal: false) == .incomplete)
+        #expect(assembler.append([0x61], startsMessage: false, isFinal: false) == .tooLarge)
+        // The oversized message is discarded, and a new one can start.
+        #expect(assembler.append(Array("ok".utf8), startsMessage: true, isFinal: true) == .message("ok"))
     }
 
     @Test func assemblerIsReusableAfterAMessage() {

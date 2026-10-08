@@ -79,6 +79,25 @@ test passes against the mock and the feature fails in production.
 
 ### Fixed
 
+- **An interface narrowed to a sub-interface no longer fails schema validation.** The
+  conformance check added below resolved covariance through the list of *object* implementors
+  only, so `interface Named implements Node` could not stand in for a field declared as `Node`
+  — valid SDL that was rejected at startup (found in review). `Schema.InterfaceType` now carries
+  `interfaces`, interfaces are checked against the interfaces they implement, and covariance
+  walks them.
+- **A `Resolve` on a root `Mutation` or `Subscription` field is rejected at startup** instead
+  of being accepted and never run. The handler (or `publish`) produces that value and the
+  executor passes it through, so the hook could not fire; a configured hook that silently does
+  nothing is the kind of leniency this release removes. `Filter` on those fields still applies.
+- **Request errors omit `data` rather than carrying `null`.** The spec (§7.1.2) distinguishes an
+  error raised before execution — `data` absent — from a failed execution — `data: null`. Over
+  the WebSocket these now arrive as a terminal `error` message, as the protocol expects, rather
+  than a `next`.
+- **A WebSocket text message is capped at 16 MiB, and a `continuation` frame with no message to
+  continue closes the socket with 1002.** NIO caps each frame; a client sending endless
+  non-final continuation frames could otherwise grow memory without bound.
+- The `405` for a `GET` mutation lists `Allow: GET, POST` — the methods the resource supports,
+  per RFC 9110 — rather than `POST` alone.
 - **Request errors were swallowed, leaving `{"data": null}` and nothing else.** An unknown
   fragment spread, a `@skip`/`@include` with a missing or non-Boolean `if`, or an undeclared
   variable in a directive threw inside the executor, and the top-level `catch` discarded the

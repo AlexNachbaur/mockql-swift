@@ -48,8 +48,10 @@ struct SchemaAssembler {
             return .object(
                 Schema.ObjectType(name: name, interfaces: interfaces, fields: try fields.map(field(from:)))
             )
-        case .interface(let name, _, let fields, _, _):
-            return .interface(Schema.InterfaceType(name: name, fields: try fields.map(field(from:))))
+        case .interface(let name, let interfaces, let fields, _, _):
+            return .interface(
+                Schema.InterfaceType(name: name, interfaces: interfaces, fields: try fields.map(field(from:)))
+            )
         case .union(let name, let members, _, _):
             return .union(Schema.UnionType(name: name, members: members))
         case .enumType(let name, let values, _, _):
@@ -126,7 +128,8 @@ struct SchemaAssembler {
 
     private func validateDefinition(_ definition: TypeDefinitionNode, in schema: Schema) throws {
         switch definition {
-        case .object(let name, let interfaces, let fields, _, let location):
+        case .object(let name, let interfaces, let fields, _, let location),
+            .interface(let name, let interfaces, let fields, _, let location):
             for interfaceName in interfaces {
                 guard let interface = schema.type(named: interfaceName) else {
                     throw error(
@@ -142,10 +145,11 @@ struct SchemaAssembler {
                         at: location
                     )
                 }
+                guard interfaceName != name else {
+                    throw error("Interface '\(name)' cannot implement itself", at: location)
+                }
                 try validateConformance(of: name, fields: fields, to: interfaceType, in: schema, at: location)
             }
-            try validateFields(fields, ownerName: name, in: schema)
-        case .interface(let name, _, let fields, _, _):
             try validateFields(fields, ownerName: name, in: schema)
         case .union(let name, let members, _, let location):
             for member in members {
@@ -309,7 +313,26 @@ struct SchemaAssembler {
             return false
         case (.named(let name), .named(let expectedName)):
             return name == expectedName || schema.possibleTypeNames(for: expectedName).contains(name)
+                || implements(name, interfaceNamed: expectedName, in: schema)
         }
+    }
+
+    /// Whether the interface `name` declares `interfaceName` among its own interfaces, directly
+    /// or through an interface it implements. `possibleTypeNames(for:)` lists only *object*
+    /// implementors, so without this a field declared as `Node` could not be narrowed to an
+    /// interface `Named implements Node` — which the spec allows.
+    private func implements(_ name: String, interfaceNamed interfaceName: String, in schema: Schema) -> Bool {
+        var visited: Set<String> = []
+        var pending = [name]
+        while let current = pending.popLast() {
+            guard visited.insert(current).inserted, case .interface(let interface) = schema.type(named: current)
+            else { continue }
+            if interface.interfaces.contains(interfaceName) {
+                return true
+            }
+            pending.append(contentsOf: interface.interfaces)
+        }
+        return false
     }
 
     private func validateInputType(

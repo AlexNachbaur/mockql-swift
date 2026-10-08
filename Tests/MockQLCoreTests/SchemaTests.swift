@@ -160,6 +160,44 @@ import Testing
         )
     }
 
+    @Test func acceptsAnInterfaceNarrowedToAnInterfaceThatImplementsIt() throws {
+        // `Named implements Node`, so a field declared as `Node` may be narrowed to `Named` —
+        // an interface, which `possibleTypeNames` (objects only) would never list.
+        let schema = try Schema(
+            sdl: """
+                type Query { box: Box }
+                interface Node { id: ID! }
+                interface Named implements Node { id: ID! name: String! }
+                type User implements Named & Node { id: ID! name: String! }
+                interface Container { child: Node }
+                type Box implements Container { child: Named }
+                """
+        )
+        guard case .interface(let named) = schema.type(named: "Named") else {
+            Issue.record("Named should be an interface")
+            return
+        }
+        #expect(named.interfaces == ["Node"])
+    }
+
+    @Test func interfacesMustConformToTheInterfacesTheyImplement() {
+        let error = schemaError(
+            """
+            type Query { a: Int }
+            interface Node { id: ID! }
+            interface Named implements Node { name: String! }
+            """
+        )
+        #expect(error?.message.contains("implements 'Node' but does not define its field 'id: ID!'") == true)
+        let unknown = schemaError(
+            """
+            type Query { a: Int }
+            interface Named implements Nod { id: ID! }
+            """
+        )
+        #expect(unknown?.message.contains("implements unknown interface 'Nod'") == true)
+    }
+
     @Test func rejectsMismatchedInterfaceFieldArguments() {
         let missing = schemaError(
             """

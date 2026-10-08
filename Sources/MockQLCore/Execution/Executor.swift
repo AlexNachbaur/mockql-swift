@@ -18,6 +18,9 @@ struct Executor {
     /// Custom field resolvers, keyed `"Type.field"` (bypasses seeded-node lookup for that field).
     let resolvers: [String: FieldResolver]
     private(set) var errors: [GraphQLError] = []
+    /// Whether the operation failed before execution began (a request error), in which case
+    /// the response must omit `data` rather than carry `null`.
+    private(set) var requestFailed = false
     /// Whether to record per-field filtering diagnostics. Off by default — the cost is small
     /// but the output is noise unless someone is asking "why is this list empty?".
     let diagnosticsEnabled: Bool
@@ -68,7 +71,10 @@ struct Executor {
             // A request-level failure raised while collecting fields (an unknown fragment, a
             // malformed `@skip`/`@include`, an undeclared variable). It must reach the client:
             // `data: null` with no `errors` is indistinguishable from a legitimately empty result.
+            // The spec (§7.1.2) wants `data` *absent*, not null, for an error raised before
+            // execution; `requestFailed` lets the engine shape the response that way.
             errors.append(error)
+            requestFailed = true
             return .null
         } catch {
             // A `NullViolation` that bubbled all the way to the root; already reported.

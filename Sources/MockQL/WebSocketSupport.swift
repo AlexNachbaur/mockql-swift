@@ -15,9 +15,18 @@ struct TextMessageAssembler {
         case message(String)
         /// The final frame arrived, but the joined bytes are not valid UTF-8.
         case invalidUTF8
+        /// A `continuation` frame arrived with no `text` frame before it (RFC 6455 §5.4).
+        case unexpectedContinuation
+        /// The message grew past ``maxMessageSize`` before its final frame arrived.
+        case tooLarge
     }
 
+    /// The most bytes one message may span. NIO caps each *frame*; without a cap here a client
+    /// sending endless non-final continuation frames would grow memory without bound.
+    static let maxMessageSize = 16 * 1024 * 1024
+
     private var pending: [UInt8] = []
+    private var isAssembling = false
 
     /// Adds one frame's payload.
     ///
@@ -29,9 +38,18 @@ struct TextMessageAssembler {
     mutating func append(_ bytes: [UInt8], startsMessage: Bool, isFinal: Bool) -> Outcome {
         if startsMessage {
             pending.removeAll(keepingCapacity: true)
+            isAssembling = true
+        } else if !isAssembling {
+            return .unexpectedContinuation
+        }
+        guard pending.count + bytes.count <= Self.maxMessageSize else {
+            pending.removeAll()
+            isAssembling = false
+            return .tooLarge
         }
         pending.append(contentsOf: bytes)
         guard isFinal else { return .incomplete }
+        isAssembling = false
         defer { pending.removeAll(keepingCapacity: true) }
         guard let text = String(bytes: pending, encoding: .utf8) else { return .invalidUTF8 }
         return .message(text)

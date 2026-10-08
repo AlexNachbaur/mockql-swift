@@ -165,7 +165,9 @@ private func makeShopEngine(
         let response = await engine.execute(GraphQLRequest(query: "{ ...Missing }"))
         let error = try #require(response.errors.first, "a failed request must say why")
         #expect(error.message.contains("Unknown fragment 'Missing'"))
-        #expect(response.data == .null)
+        // Raised before execution began, so `data` is absent — not `null` (spec §7.1.2).
+        #expect(response.data == nil)
+        #expect(response.responseValue.objectValue?["data"] == nil)
     }
 
     @Test func unknownFragmentSpreadSuggestsTheNearestFragment() async throws {
@@ -856,7 +858,7 @@ private func makeShopEngine(
     @Test func injectedStoreMergesSeedInsteadOfReplacing() async throws {
         // A sibling service (e.g. MockREST) already put state in the shared store.
         let store = StateStore()
-        await store.withMutationState { state in
+        _ = await store.withMutationState { state in
             state.insert("Product", ["id": "existing-1", "name": "Pre-seeded", "priceCents": 100])
         }
 

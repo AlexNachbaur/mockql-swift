@@ -38,6 +38,12 @@ final class GraphQLWSHandler: ChannelInboundHandler, @unchecked Sendable {
                 handleMessage(text, context: context)
             case .invalidUTF8:
                 close(context: context, code: 1007, reason: "Text message is not valid UTF-8")
+            case .unexpectedContinuation:
+                close(context: context, code: 1002, reason: "Continuation frame without a message to continue")
+            case .tooLarge:
+                close(
+                    context: context, code: 1009, reason: "Message exceeds \(TextMessageAssembler.maxMessageSize) bytes"
+                )
             }
         case .ping:
             var pong = frame

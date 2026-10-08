@@ -252,6 +252,25 @@ private func ids(_ list: GraphQLValue) -> [String] {
         #expect(ids(response.data?["tags"] ?? .null) == ["t1", "t2", "t3"])
     }
 
+    @Test func resolverOnARootMutationFieldIsRejectedRatherThanIgnored() async throws {
+        // The handler produces a root mutation field's value and the executor passes it through,
+        // so a Resolve there would be accepted and never consulted.
+        let error = await #expect(throws: MockQLError.self) {
+            _ = try await MockQLEngine(
+                schema: .sdl(
+                    """
+                    type Query { a: Int }
+                    type Mutation { bump: Int }
+                    """
+                )
+            ) {
+                Mutation("bump") { _, _ in .int(1) }
+                Resolve("Mutation.bump") { _, _ in .int(99) }
+            }
+        }
+        #expect(error?.message.contains("targets a root Mutation field") == true)
+    }
+
     @Test func duplicateResolverForSameFieldIsRejected() async throws {
         await #expect(throws: MockQLError.self) {
             _ = try await makeEngine {

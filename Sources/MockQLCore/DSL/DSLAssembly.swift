@@ -90,6 +90,20 @@ struct DSLAssembly {
                 )
             }
             try validateFieldKey(resolve.key, kind: "Resolve", requiringListOrConnection: false, schema: schema)
+            // A root mutation or subscription field's value is produced by its handler (or by
+            // `publish`), which the executor passes through as given — a Resolve registered
+            // there would be accepted and never run. Refuse it rather than let a configured
+            // hook silently do nothing.
+            let rootTypeName = resolve.key.split(separator: ".", maxSplits: 1).first.map(String.init)
+            if let rootTypeName, rootTypeName == schema.mutationTypeName || rootTypeName == schema.subscriptionTypeName
+            {
+                throw MockQLError(
+                    category: .configuration,
+                    message: "Resolve '\(resolve.key)' targets a root \(rootTypeName) field, whose value comes from "
+                        + "its handler; declare the value in the Mutation/Subscription handler instead, or use a "
+                        + "Filter to narrow a list it returns"
+                )
+            }
             resolvers[resolve.key] = resolve.resolver
         }
         return Output(

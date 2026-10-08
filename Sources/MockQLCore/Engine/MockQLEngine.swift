@@ -125,6 +125,9 @@ public final class MockQLEngine: Sendable {
             declaredVariables: operation.declaredVariableNames
         )
         let data = executor.executeQuery(selections: operation.selectionSet)
+        if executor.requestFailed {
+            return .requestFailed(executor.errors)
+        }
         return GraphQLResponse(
             data: data,
             errors: executor.errors,
@@ -179,9 +182,10 @@ public final class MockQLEngine: Sendable {
         do {
             rootFields = try planner.collectRootFields(operation.selectionSet, typeName: mutationTypeName)
         } catch let error as GraphQLError {
-            return GraphQLResponse(data: .null, errors: [error])
+            // Raised before any handler ran: a request error, so `data` is absent (§7.1.2).
+            return .requestFailed([error])
         } catch {
-            return GraphQLResponse(data: .null, errors: [GraphQLError(message: String(describing: error))])
+            return .requestFailed([GraphQLError(message: String(describing: error))])
         }
 
         var result: [String: GraphQLValue] = [:]
