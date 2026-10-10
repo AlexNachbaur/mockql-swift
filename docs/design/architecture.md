@@ -1,6 +1,6 @@
 # MockQL Architecture
 
-Status: **accepted** · Last updated: 2026-07-12
+Status: **accepted** · Last updated: 2026-10-05
 
 ## Goals
 
@@ -12,27 +12,41 @@ Status: **accepted** · Last updated: 2026-07-12
 ## Module layout
 
 ```
-┌────────────────────────────────────────────────────────┐
-│ MockQL (transport + facade)              deps: NIO     │
-│   MockQLServer, HTTP POST /graphql,                    │
-│   graphql-transport-ws WebSocket subscriptions         │
-├────────────────────────────────────────────────────────┤
-│ MockQLCore (portable engine)             deps: Yams    │
-│   GraphQLValue        dynamic value model              │
-│   Lexer / Parser      SDL + executable documents       │
-│   Schema              type-system model + validation   │
-│   SchemaBuilder DSL   result-builder schema definition │
-│   Generators          pluggable realistic data         │
-│   SeedDocument        load / validate / coerce seeds   │
-│   StateStore          actor-based in-memory records    │
-│   Executor            spec-compliant(-enough) resolver │
-│   MockQLEngine        schema + store + execute()       │
-└────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ MockQL (transport + facade)      deps: MockCoreTransport, NIO    │
+│   MockQLServer       single-service host facade                  │
+│   MockQLService      GraphQL over HTTP (POST; GET for queries)   │
+│   GraphQLWSHandler   graphql-transport-ws over WebSocket         │
+├──────────────────────────────────────────────────────────────────┤
+│ MockQLCore (portable engine)     deps: MockCore                  │
+│   Lexer / parsers    SDL + executable documents                  │
+│   Schema             type-system model + validation              │
+│   MockQLBuilder DSL  Query / Mutation / Object / Seed / Root /   │
+│                      Generate / Filter / Resolve declarations    │
+│   SeedLoader         validate / coerce seeds against the schema  │
+│   Executor           spec-compliant(-enough) resolver            │
+│   SubscriptionHub    subscriber registry + event fan-out         │
+│   MockQLEngine       schema + store + execute() / subscribe()    │
+├──────────────────────────────────────────────────────────────────┤
+│ MockCore platform (mockcore-swift, shared with MockREST)         │
+│   MockCore           MockValue (aliased here as GraphQLValue),   │
+│                      StateStore, generators, seed decoding       │
+│                      (JSON + YAML via Yams), MockError           │
+│   MockCoreTransport  MockHost / MockService on SwiftNIO          │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+The value model, the state store, the generators, and seed *decoding* were extracted into the
+MockCore platform so that GraphQL and REST mocks can share one store on one port. `MockQLCore`
+re-exports `MockCore` and keeps the original spellings as type aliases (`GraphQLValue`,
+`MockQLError`), so `import MockQLCore` — or `import MockQL` — is still the only import a
+consumer needs. What stays here is everything GraphQL-specific: the language, the schema, seed
+*validation* against that schema, and execution.
 
 Rules:
 
-- `MockQLCore` must never import NIO (or any Apple-only framework). It is the portability boundary:
+- `MockQLCore` must never import NIO (or any Apple-only framework), and has no direct
+  third-party dependency: Yams reaches it only through MockCore, which owns YAML decoding. It is the portability boundary:
   a host that cannot or does not want to bind a port can still `import MockQLCore` and execute
   operations in-process. (This was originally motivated by Windows, which SwiftNIO was assumed
   not to support; NIOPosix has since carried a Windows port and CI tests the full stack there,
@@ -45,9 +59,9 @@ Rules:
 
 | Decision | Choice | Why |
 |---|---|---|
-| Transport | SwiftNIO HTTP/1.1 + WebSocket | Industry standard, cross-platform (macOS/Linux/Android) |
+| Transport | SwiftNIO HTTP/1.1 + WebSocket, via MockCoreTransport's `MockHost` | Industry standard, cross-platform (macOS/iOS/Linux/Windows/Android); one host can serve several protocol mocks |
 | Subscriptions | `graphql-transport-ws` | What Apollo/urql/Relay speak natively |
-| YAML | Yams | Standard Swift YAML; hand-rolling YAML is a maintenance trap |
+| YAML | Yams, inside MockCore | Standard Swift YAML; hand-rolling YAML is a maintenance trap. Not a direct dependency of this package |
 | GraphQL parsing | Hand-written lexer/parser | Precise, friendly errors; no NIO leakage; portability |
 | State | Single actor-backed store | Serialized mutations, `Sendable`-safe reads |
 | Identity | `id` field per record (per-type key paths designed in for future `@key` support) | Matches Relay/Apollo normalized caches |
@@ -60,10 +74,17 @@ Rules:
 2. **Query**: parse operation → validate variables → walk selections against the store, resolving
    references, synthesizing Relay connections, and generating missing field values (stable per
    record+field for the server's lifetime).
-3. **Mutation**: dispatch to the registered Swift closure with `(input, state)`; the closure
-   mutates the store through a transactional context; the returned value is resolved like a query.
-4. **Subscription**: `server.publish(_:payload:)` from test code fans out `next` messages to
-   matching `graphql-transport-ws` subscribers.
+3. **Mutation**: collect the root fields exactly as a query's are (fragments, `@skip`/`@include`,
+   one run per response key), then dispatch each to its registered Swift closure with
+   `(input, state)`; the closure mutates the store through a transactional context; the returned
+   value is resolved like a query, with the same `Filter`/`Resolve` hooks.
+4. **Subscription**: the root field's arguments are validated when the client subscribes;
+   `server.publish(_:payload:)` from test code then fans out `next` messages to matching
+   `graphql-transport-ws` subscribers, each resolved through its own selection set.
+
+Over HTTP, `GET` runs queries only — a mutation sent by `GET` is refused with `405`. Over the
+WebSocket, `subscribe` carries any operation: a query or mutation yields one `next` and then
+`complete`.
 
 ## Error philosophy
 

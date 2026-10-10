@@ -21,6 +21,18 @@ returns only the comments whose `postId` is `"p1"`. Pagination arguments (`first
 ignored — so `comments(first: 2)` paginates without filtering. Filtering runs before connection
 pagination, and applies equally to plain object lists (`tags(kind:): [Tag!]!`).
 
+Pagination follows the Relay cursor specification: `after`/`before` narrow the window, then
+`first` keeps its head and `last` its tail. A negative `first` or `last` is a field error rather
+than "no limit".
+
+The convention, ``Filter``, and ``Resolve`` behave identically wherever a field is reached —
+from a query, inside a mutation's payload, or inside a subscription event. The one exception is
+the root field itself: the value a mutation handler (or `publish`) returns is passed through as
+given, and never re-filtered by the mutation's own arguments, because the handler already saw
+them. A ``Filter`` registered for that field (`Filter("Mutation.archive")`) still applies, but a
+``Resolve`` on a root mutation or subscription field is rejected at startup — the handler *is*
+that field's resolver.
+
 ### Null arguments do not filter
 
 An argument whose value is `null` — whether written literally or supplied by a null variable — is
@@ -76,16 +88,6 @@ honoring pagination arguments), or a fully-formed value. A resolver is **authori
 is not post-filtered by the convention or a `Filter`, and declaring both a `Resolve` and a `Filter`
 for the same field is a configuration error.
 
-## Topics
-
-### Declarations
-
-- ``Filter``
-- ``Resolve``
-- ``FieldFilter``
-- ``FieldResolver``
-- ``StoreView``
-
 ## Diagnosing an unexpected result
 
 Filtering is deliberately quiet: an argument that names no scalar node field is ignored, and a
@@ -118,3 +120,13 @@ let engine = try await MockQLEngine(schema: .sdl(sdl), seed: .yaml(seed), diagno
 
 Off by default, and scoped to the response rather than a log, so it works identically in-process,
 over HTTP, and on platforms with no logging backend.
+
+## Topics
+
+### Declarations
+
+- ``Filter``
+- ``Resolve``
+- ``FieldFilter``
+- ``FieldResolver``
+- ``StoreView``

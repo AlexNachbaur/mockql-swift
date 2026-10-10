@@ -2,15 +2,21 @@
 ///
 /// Implements the lexical grammar from the GraphQL specification: punctuators, names, numbers,
 /// strings (including block strings), with comments, commas, and whitespace ignored.
+///
+/// The lexer works over Unicode *scalars*, as the specification defines source text — not over
+/// Swift `Character`s, which are grapheme clusters. Clustering glues a combining mark onto
+/// whatever precedes it, so a `"` followed by U+0301 would stop being a quote, and `b` + U+0301
+/// would compare inside `"a"..."z"` and pass as a name character. Columns in reported locations
+/// therefore count scalars.
 struct Lexer {
-    private let characters: [Character]
+    private let scalars: [Unicode.Scalar]
     private let sourceName: String?
     private var index = 0
     private var line = 1
     private var column = 1
 
     private init(source: String, sourceName: String?) {
-        self.characters = Array(Lexer.normalizingLineTerminators(source))
+        self.scalars = Array(Lexer.normalizingLineTerminators(source).unicodeScalars)
         self.sourceName = sourceName
     }
 
@@ -153,8 +159,8 @@ struct Lexer {
 
     private mutating func scanName(at location: SourceLocation) -> Token {
         var name = ""
-        while let character = peek(), character.isNameContinuation {
-            name.append(character)
+        while let scalar = peek(), scalar.isNameContinuation {
+            name.unicodeScalars.append(scalar)
             advance()
         }
         return Token(kind: .name(name), location: location)
@@ -185,7 +191,7 @@ struct Lexer {
             text.append("e")
             advance()
             if peek() == "+" || peek() == "-", let sign = peek() {
-                text.append(sign)
+                text.unicodeScalars.append(sign)
                 advance()
             }
             guard let digit = peek(), digit.isASCIIDigit else {
@@ -209,8 +215,8 @@ struct Lexer {
     }
 
     private mutating func appendDigits(to text: inout String) {
-        while let character = peek(), character.isASCIIDigit {
-            text.append(character)
+        while let scalar = peek(), scalar.isASCIIDigit {
+            text.unicodeScalars.append(scalar)
             advance()
         }
     }
@@ -230,16 +236,16 @@ struct Lexer {
                 throw syntaxError("Unterminated string literal", at: location)
             case "\\":
                 advance()
-                value.append(try scanEscapeSequence(at: location))
+                value.unicodeScalars.append(try scanEscapeSequence(at: location))
             default:
-                value.append(character)
+                value.unicodeScalars.append(character)
                 advance()
             }
         }
         throw syntaxError("Unterminated string literal", at: location)
     }
 
-    private mutating func scanEscapeSequence(at location: SourceLocation) throws -> Character {
+    private mutating func scanEscapeSequence(at location: SourceLocation) throws -> Unicode.Scalar {
         guard let escaped = peek() else {
             throw syntaxError("Unterminated escape sequence in string", at: location)
         }
@@ -254,27 +260,87 @@ struct Lexer {
         case "r": return "\r"
         case "t": return "\t"
         case "u":
-            var hex = ""
-            for _ in 0..<4 {
-                guard let digit = peek(), digit.isHexDigit else {
-                    throw syntaxError("Invalid unicode escape in string; expected 4 hex digits after \\u", at: location)
-                }
-                hex.append(digit)
-                advance()
-            }
-            guard let codepoint = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(codepoint) else {
-                throw syntaxError("Invalid unicode escape '\\u\(hex)' in string", at: location)
-            }
-            return Character(scalar)
+            return try scanUnicodeEscape(at: location)
         default:
             throw syntaxError("Invalid escape sequence '\\\(escaped)' in string", at: location)
         }
     }
 
+    /// Scans what follows `\u`: the fixed-width `XXXX` form — including a UTF-16 surrogate pair
+    /// written as two of them, which is how JSON-minded tools escape anything outside the Basic
+    /// Multilingual Plane — or the variable-width `{X…}` form.
+    private mutating func scanUnicodeEscape(at location: SourceLocation) throws -> Unicode.Scalar {
+        if peek() == "{" {
+            return try scanBracedUnicodeEscape(at: location)
+        }
+        let (unit, hex) = try scanFourHexDigits(at: location)
+        guard (0xD800...0xDBFF).contains(unit) else {
+            // Includes a lone trailing surrogate, which `Unicode.Scalar` refuses.
+            guard let scalar = Unicode.Scalar(unit) else {
+                throw syntaxError("Invalid unicode escape '\\u\(hex)' in string", at: location)
+            }
+            return scalar
+        }
+        guard peek() == "\\", peek(offset: 1) == "u" else {
+            throw syntaxError(
+                "Invalid unicode escape '\\u\(hex)' in string; a leading surrogate must be followed by a "
+                    + "trailing surrogate escape (\\uDC00-\\uDFFF)",
+                at: location
+            )
+        }
+        advance(by: 2)
+        let (trailing, trailingHex) = try scanFourHexDigits(at: location)
+        guard (0xDC00...0xDFFF).contains(trailing),
+            let scalar = Unicode.Scalar(0x10000 + ((unit - 0xD800) << 10) + (trailing - 0xDC00))
+        else {
+            throw syntaxError(
+                "Invalid unicode escape '\\u\(hex)\\u\(trailingHex)' in string; '\\u\(trailingHex)' is not a "
+                    + "trailing surrogate (\\uDC00-\\uDFFF)",
+                at: location
+            )
+        }
+        return scalar
+    }
+
+    private mutating func scanFourHexDigits(at location: SourceLocation) throws -> (value: UInt32, text: String) {
+        var hex = ""
+        for _ in 0..<4 {
+            guard let digit = peek(), digit.isHexDigit else {
+                throw syntaxError("Invalid unicode escape in string; expected 4 hex digits after \\u", at: location)
+            }
+            hex.unicodeScalars.append(digit)
+            advance()
+        }
+        guard let value = UInt32(hex, radix: 16) else {
+            throw syntaxError("Invalid unicode escape '\\u\(hex)' in string", at: location)
+        }
+        return (value, hex)
+    }
+
+    private mutating func scanBracedUnicodeEscape(at location: SourceLocation) throws -> Unicode.Scalar {
+        advance()  // opening brace
+        var hex = ""
+        while let digit = peek(), digit.isHexDigit {
+            hex.unicodeScalars.append(digit)
+            advance()
+        }
+        guard peek() == "}", !hex.isEmpty else {
+            throw syntaxError(
+                "Invalid unicode escape in string; expected hex digits and a closing '}' after \\u{",
+                at: location
+            )
+        }
+        advance()  // closing brace
+        guard let value = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(value) else {
+            throw syntaxError("Invalid unicode escape '\\u{\(hex)}' in string", at: location)
+        }
+        return scalar
+    }
+
     private mutating func scanBlockString(at location: SourceLocation) throws -> Token {
         advance(by: 3)  // opening """
         var raw = ""
-        while index < characters.count {
+        while index < scalars.count {
             if peek() == "\"", peek(offset: 1) == "\"", peek(offset: 2) == "\"" {
                 advance(by: 3)
                 return Token(kind: .stringValue(Lexer.dedentBlockString(raw)), location: location)
@@ -284,8 +350,8 @@ struct Lexer {
                 advance(by: 4)
                 continue
             }
-            if let character = peek() {
-                raw.append(character)
+            if let scalar = peek() {
+                raw.unicodeScalars.append(scalar)
                 advance()
             }
         }
@@ -317,15 +383,15 @@ struct Lexer {
 
     // MARK: - Cursor
 
-    private func peek(offset: Int = 0) -> Character? {
+    private func peek(offset: Int = 0) -> Unicode.Scalar? {
         let target = index + offset
-        guard target < characters.count else { return nil }
-        return characters[target]
+        guard target < scalars.count else { return nil }
+        return scalars[target]
     }
 
     private mutating func advance(by count: Int = 1) {
-        for _ in 0..<count where index < characters.count {
-            if characters[index] == "\n" {
+        for _ in 0..<count where index < scalars.count {
+            if scalars[index] == "\n" {
                 line += 1
                 column = 1
             } else {
@@ -340,7 +406,7 @@ struct Lexer {
     }
 }
 
-extension Character {
+extension Unicode.Scalar {
     fileprivate var isNameStart: Bool {
         self == "_" || ("a"..."z").contains(self) || ("A"..."Z").contains(self)
     }
@@ -351,5 +417,9 @@ extension Character {
 
     fileprivate var isASCIIDigit: Bool {
         ("0"..."9").contains(self)
+    }
+
+    fileprivate var isHexDigit: Bool {
+        isASCIIDigit || ("a"..."f").contains(self) || ("A"..."F").contains(self)
     }
 }

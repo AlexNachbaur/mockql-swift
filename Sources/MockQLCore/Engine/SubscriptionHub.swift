@@ -2,43 +2,34 @@ import Foundation
 
 /// Tracks active subscription operations and fans published events out to them.
 actor SubscriptionHub {
-    struct Entry {
-        let id: UUID
+    /// Everything needed to resolve a published payload for one subscriber: its root field, the
+    /// arguments it subscribed with, and its own selection set.
+    struct Subscriber {
         let rootField: String
         let responseKey: String
         let fieldType: TypeReference
+        let arguments: GraphQLValue
         let selections: [SelectionNode]
         let fragments: [String: FragmentDefinitionNode]
         let variables: [String: GraphQLValue]
+        let declaredVariables: Set<String>
+    }
+
+    private struct Entry {
+        let subscriber: Subscriber
         let continuation: AsyncStream<GraphQLResponse>.Continuation
     }
 
     private var entries: [UUID: Entry] = [:]
 
     /// Registers a subscriber and returns its event stream.
-    func register(
-        rootField: String,
-        responseKey: String,
-        fieldType: TypeReference,
-        selections: [SelectionNode],
-        fragments: [String: FragmentDefinitionNode],
-        variables: [String: GraphQLValue]
-    ) -> AsyncStream<GraphQLResponse> {
+    func register(_ subscriber: Subscriber) -> AsyncStream<GraphQLResponse> {
         let id = UUID()
         let (stream, continuation) = AsyncStream<GraphQLResponse>.makeStream()
         continuation.onTermination = { _ in
             Task { await self.remove(id) }
         }
-        entries[id] = Entry(
-            id: id,
-            rootField: rootField,
-            responseKey: responseKey,
-            fieldType: fieldType,
-            selections: selections,
-            fragments: fragments,
-            variables: variables,
-            continuation: continuation
-        )
+        entries[id] = Entry(subscriber: subscriber, continuation: continuation)
         return stream
     }
 
@@ -47,8 +38,10 @@ actor SubscriptionHub {
     }
 
     /// The subscribers currently listening to a subscription field.
-    func subscribers(to rootField: String) -> [Entry] {
-        entries.values.filter { $0.rootField == rootField }
+    func subscribers(
+        to rootField: String
+    ) -> [(subscriber: Subscriber, continuation: AsyncStream<GraphQLResponse>.Continuation)] {
+        entries.values.filter { $0.subscriber.rootField == rootField }.map { ($0.subscriber, $0.continuation) }
     }
 
     /// The number of active subscribers (all fields).

@@ -7,15 +7,19 @@ private let shopSDL = """
     type Query {
         currentUser: User
         cart: Cart
-        products(first: Int, after: String): ProductConnection!
+        products(first: Int, after: String, last: Int, before: String): ProductConnection!
         product(id: ID!): Product
         featured: SearchItem
     }
     type Mutation {
         addToCart(productId: ID!, quantity: Int = 1): Cart!
         updateDisplayName(name: String!): User!
+        restock(first: Int, after: String): ProductConnection!
     }
-    type Subscription { orderStatusChanged: Order! }
+    type Subscription {
+        orderStatusChanged: Order!
+        orderUpdated(id: ID!): Order!
+    }
     union SearchItem = User | Product
     type User { id: ID! name: String! email: String! phone: String }
     type Product { id: ID! name: String! priceCents: Int! }
@@ -156,6 +160,90 @@ private func makeShopEngine(
         #expect(coerced.data?["product"] == .null)
     }
 
+    @Test func unknownFragmentSpreadIsReportedInErrors() async throws {
+        let engine = try await makeShopEngine()
+        let response = await engine.execute(GraphQLRequest(query: "{ ...Missing }"))
+        let error = try #require(response.errors.first, "a failed request must say why")
+        #expect(error.message.contains("Unknown fragment 'Missing'"))
+        // Raised before execution began, so `data` is absent — not `null` (spec §7.1.2).
+        #expect(response.data == nil)
+        #expect(response.responseValue.objectValue?["data"] == nil)
+    }
+
+    @Test func unknownFragmentSpreadSuggestsTheNearestFragment() async throws {
+        let engine = try await makeShopEngine()
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: """
+                    { currentUser { ...UserFeilds } }
+                    fragment UserFields on User { name }
+                    """
+            )
+        )
+        #expect(response.errors.first?.message.contains("Did you mean 'UserFields'?") == true)
+    }
+
+    @Test func undeclaredVariableInADirectiveIsReportedInErrors() async throws {
+        let engine = try await makeShopEngine()
+        let response = await engine.execute(
+            GraphQLRequest(query: "{ currentUser { name @skip(if: $nope) } }")
+        )
+        let error = try #require(response.errors.first, "a failed request must say why")
+        #expect(error.message.contains("Variable '$nope' is not declared"))
+        #expect(error.locations.isEmpty == false)
+    }
+
+    @Test func undeclaredVariableSuggestsADeclaredOne() async throws {
+        let engine = try await makeShopEngine()
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: "query Q($first: Int) { products(first: $frist) { totalCount } }",
+                variables: ["first": 1]
+            )
+        )
+        let error = try #require(response.errors.first)
+        #expect(error.message.contains("Variable '$frist' is not declared"))
+        #expect(error.message.contains("Did you mean 'first'?"))
+    }
+
+    @Test func omittedNullableVariableLeavesItsArgumentAbsent() async throws {
+        let engine = try await makeShopEngine()
+        let response = await engine.execute(
+            GraphQLRequest(query: "query Q($n: Int) { products(first: $n) { edges { node { name } } } }")
+        )
+        #expect(response.errors.isEmpty)
+        #expect(response.data?["products"]["edges"].count == 3)
+    }
+
+    @Test func omittedVariableFeedingARequiredArgumentIsAMissingArgument() async throws {
+        let engine = try await makeShopEngine()
+        let response = await engine.execute(
+            GraphQLRequest(query: "query Q($id: ID) { product(id: $id) { name } }")
+        )
+        #expect(response.errors.first?.message.contains("Missing required argument 'id'") == true)
+        #expect(response.data?["product"] == .null)
+    }
+
+    @Test func intArgumentsOutsideThe32BitRangeAreRejected() async throws {
+        let engine = try await makeShopEngine()
+        let literal = await engine.execute(GraphQLRequest(query: "{ products(first: 2147483648) { totalCount } }"))
+        #expect(literal.errors.first?.message.contains("outside the signed 32-bit range") == true)
+        #expect(literal.errors.first?.extensions["code"] == .string("BAD_INPUT"))
+
+        let variable = await engine.execute(
+            GraphQLRequest(
+                query: "query Q($n: Int) { products(first: $n) { totalCount } }",
+                variables: ["n": .int(-2_147_483_649)]
+            )
+        )
+        #expect(variable.data == nil)
+        #expect(variable.errors.first?.message.contains("variable '$n'") == true)
+
+        // The bounds themselves are in range.
+        let maximum = await engine.execute(GraphQLRequest(query: "{ products(first: 2147483647) { totalCount } }"))
+        #expect(maximum.errors.isEmpty)
+    }
+
     @Test func idArgumentsLookUpSeededRecords() async throws {
         let engine = try await makeShopEngine()
         let response = await engine.execute(GraphQLRequest(query: #"{ product(id: "p2") { name } }"#))
@@ -229,6 +317,74 @@ private func makeShopEngine(
         #expect(data["products"]["edges"][1]["node"]["name"] == .string("Kettle"))
         #expect(data["products"]["pageInfo"]["hasNextPage"] == .bool(false))
     }
+
+    @Test func lastKeepsTheTailOfTheConnection() async throws {
+        let engine = try await makeShopEngine()
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: """
+                    { products(last: 2) {
+                        edges { cursor node { name } }
+                        pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+                    } }
+                    """
+            )
+        )
+        #expect(response.errors.isEmpty)
+        let products = try #require(response.data?["products"])
+        #expect(products["edges"].count == 2)
+        #expect(products["edges"][0]["node"]["name"] == .string("Burr Grinder"))
+        #expect(products["edges"][1]["node"]["name"] == .string("Kettle"))
+        #expect(products["pageInfo"]["hasPreviousPage"] == .bool(true))
+        #expect(products["pageInfo"]["hasNextPage"] == .bool(false))
+        #expect(products["pageInfo"]["startCursor"] == products["edges"][0]["cursor"])
+        #expect(products["pageInfo"]["endCursor"] == products["edges"][1]["cursor"])
+    }
+
+    @Test func beforeCursorPagesBackward() async throws {
+        let engine = try await makeShopEngine()
+        let all = await engine.execute(GraphQLRequest(query: "{ products { edges { cursor } } }"))
+        let lastCursor = try #require(all.data?["products"]["edges"][2]["cursor"].stringValue)
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: """
+                    query Q($c: String) { products(last: 1, before: $c) {
+                        edges { node { name } }
+                        pageInfo { hasNextPage hasPreviousPage }
+                    } }
+                    """,
+                variables: ["c": .string(lastCursor)]
+            )
+        )
+        #expect(response.errors.isEmpty)
+        let products = try #require(response.data?["products"])
+        #expect(products["edges"].count == 1)
+        #expect(products["edges"][0]["node"]["name"] == .string("Burr Grinder"))
+        #expect(products["pageInfo"]["hasNextPage"] == .bool(true))
+        #expect(products["pageInfo"]["hasPreviousPage"] == .bool(true))
+    }
+
+    @Test(arguments: ["first", "last"])
+    func negativePageSizeIsAnError(argument: String) async throws {
+        let engine = try await makeShopEngine()
+        let response = await engine.execute(
+            GraphQLRequest(query: "{ products(\(argument): -1) { totalCount } }")
+        )
+        #expect(response.errors.count == 1)
+        let error = try #require(response.errors.first)
+        #expect(error.message == "Argument '\(argument)' of 'Query.products' must be a non-negative integer, found -1")
+        #expect(error.path == [.field("products")])
+        #expect(response.data == .null)
+    }
+
+    @Test func cursorPointingOutsideTheListYieldsAnEmptyPage() async throws {
+        let engine = try await makeShopEngine()
+        let response = await engine.execute(
+            GraphQLRequest(query: #"{ products(after: "cursor:-9", before: "cursor:-4") { edges { cursor } } }"#)
+        )
+        #expect(response.errors.isEmpty)
+        #expect(response.data?["products"]["edges"].count == 0)
+    }
 }
 
 @Suite struct EngineMutationTests {
@@ -250,7 +406,119 @@ private func makeShopEngine(
                 }
                 return state["User", id: "user-1"]
             }
+            Mutation("restock") { _, state in
+                .list(["p1", "p2", "p3"].map { .reference("Product", id: $0) })
+            }
         }
+    }
+
+    @Test func skippedMutationFieldDoesNotRunItsHandler() async throws {
+        let engine = try await engineWithHandlers()
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: """
+                    mutation M($skip: Boolean!) {
+                        updateDisplayName(name: "Renamed") @skip(if: $skip) { name }
+                        kept: updateDisplayName(name: "Kept") @include(if: false) { name }
+                    }
+                    """,
+                variables: ["skip": true]
+            )
+        )
+        #expect(response.errors.isEmpty)
+        #expect(response.data == .object([:]))
+        #expect(await engine.store.record(type: "User", id: "user-1")?["name"] == .string("Avery Quinn"))
+    }
+
+    @Test func mutationRootFragmentsAreExpanded() async throws {
+        let engine = try await engineWithHandlers()
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: """
+                    mutation { ...Rename ... on Mutation { __typename } }
+                    fragment Rename on Mutation { updateDisplayName(name: "Fragmented") { name } }
+                    """
+            )
+        )
+        #expect(response.errors.isEmpty)
+        #expect(response.data?["updateDisplayName"]["name"] == .string("Fragmented"))
+        #expect(response.data?["__typename"] == .string("Mutation"))
+    }
+
+    @Test func fieldsSharingAResponseKeyRunTheHandlerOnce() async throws {
+        let engine = try await engineWithHandlers()
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: """
+                    mutation {
+                        addToCart(productId: "p1") { id }
+                        addToCart(productId: "p1") { items { quantity } }
+                    }
+                    """
+            )
+        )
+        #expect(response.errors.isEmpty)
+        // One handler run, and the two selection sets merged into the one result.
+        #expect(await engine.store.records(ofType: "CartItem").count == 1)
+        #expect(response.data?["addToCart"]["id"] == .string("cart-1"))
+        #expect(response.data?["addToCart"]["items"].count == 1)
+    }
+
+    @Test func unknownFragmentAtTheMutationRootRunsNoHandler() async throws {
+        let engine = try await engineWithHandlers()
+        let response = await engine.execute(
+            GraphQLRequest(query: #"mutation { updateDisplayName(name: "X") { name } ...Missing }"#)
+        )
+        #expect(response.errors.first?.message.contains("Unknown fragment 'Missing'") == true)
+        #expect(await engine.store.record(type: "User", id: "user-1")?["name"] == .string("Avery Quinn"))
+    }
+
+    @Test func omittedVariableLetsTheArgumentDefaultApply() async throws {
+        let engine = try await engineWithHandlers()
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: #"mutation M($q: Int) { addToCart(productId: "p1", quantity: $q) { items { quantity } } }"#
+            )
+        )
+        #expect(response.errors.isEmpty)
+        #expect(response.data?["addToCart"]["items"][0]["quantity"] == .int(1))
+    }
+
+    @Test func nullViolationNamesTheMutationTypeNotQuery() async throws {
+        let engine = try await makeShopEngine {
+            Mutation("updateDisplayName") { _, _ in .null }
+        }
+        let response = await engine.execute(
+            GraphQLRequest(query: #"mutation { updateDisplayName(name: "X") { name } }"#)
+        )
+        #expect(response.errors.count == 1)
+        #expect(
+            response.errors.first?.message
+                == "Cannot return null for non-nullable field 'Mutation.updateDisplayName'"
+        )
+        #expect(response.data == .null)
+    }
+
+    @Test func connectionReturningMutationHonorsPaginationArguments() async throws {
+        let engine = try await engineWithHandlers()
+        let response = await engine.execute(
+            GraphQLRequest(
+                query: """
+                    mutation { restock(first: 1, after: "cursor:0") {
+                        totalCount
+                        edges { node { name } }
+                        pageInfo { hasNextPage hasPreviousPage }
+                    } }
+                    """
+            )
+        )
+        #expect(response.errors.isEmpty)
+        let restock = try #require(response.data?["restock"])
+        #expect(restock["totalCount"] == .int(3))
+        #expect(restock["edges"].count == 1)
+        #expect(restock["edges"][0]["node"]["name"] == .string("Burr Grinder"))
+        #expect(restock["pageInfo"]["hasNextPage"] == .bool(true))
+        #expect(restock["pageInfo"]["hasPreviousPage"] == .bool(true))
     }
 
     @Test func mutationUpdatesStateAndResolvesResult() async throws {
@@ -379,6 +647,54 @@ private func makeShopEngine(
         }
     }
 
+    private func configurationError(
+        @MockQLBuilder _ configuration: @escaping () -> [any MockQLDeclaration]
+    ) async -> MockQLError? {
+        do {
+            _ = try await makeShopEngine(configuration: configuration)
+            return nil
+        } catch {
+            return error as? MockQLError
+        }
+    }
+
+    @Test func seedFromANonObjectLiteralIsRejected() async {
+        let error = await configurationError {
+            Seed("Product", id: "p9", ["Kettle", 8900])
+        }
+        #expect(error?.category == .configuration)
+        #expect(error?.message.contains(#"Seed("Product", id: "p9") expects an object of field values"#) == true)
+    }
+
+    @Test func seedSettingAFieldTwiceIsRejected() async {
+        let error = await configurationError {
+            Seed("Product", id: "p9") {
+                Value("name", "Kettle")
+                Value("name", "Gooseneck Kettle")
+            }
+        }
+        #expect(error?.category == .configuration)
+        #expect(error?.message == #"Seed("Product", id: "p9") sets field 'name' more than once; keep one Value"#)
+    }
+
+    @Test func rootDeclaredTwiceIsRejected() async {
+        let error = await configurationError {
+            Root("currentUser", "user-1")
+            Root("currentUser", "user-2")
+        }
+        #expect(error?.category == .configuration)
+        #expect(error?.message.contains("Root 'currentUser' is declared more than once") == true)
+    }
+
+    @Test func overlayGeneratorBoundTwiceIsRejected() async {
+        let error = await configurationError {
+            Object("User") { Field("email", .email) }
+            Object("User") { Field("email", .constant("fixed@example.com")) }
+        }
+        #expect(error?.category == .configuration)
+        #expect(error?.message == "Generator for 'User.email' is declared more than once")
+    }
+
     @Test func overlayMutationMustExistInSchema() async {
         do {
             _ = try await MockQLEngine(schema: .sdl(shopSDL)) {
@@ -449,6 +765,86 @@ private func makeShopEngine(
         }
     }
 
+    @Test func subscribingWithoutARequiredArgumentIsRejected() async throws {
+        let engine = try await makeShopEngine()
+        do {
+            _ = try await engine.subscribe(GraphQLRequest(query: "subscription { orderUpdated { id } }"))
+            Issue.record("Expected the subscription to be rejected")
+        } catch let error as GraphQLError {
+            #expect(error.message == "Missing required argument 'id' on field 'orderUpdated'")
+        }
+        #expect(await engine.activeSubscriptionCount() == 0)
+    }
+
+    @Test func subscribingWithAnUnknownArgumentSuggestsTheRightOne() async throws {
+        let engine = try await makeShopEngine()
+        do {
+            _ = try await engine.subscribe(
+                GraphQLRequest(query: #"subscription { orderUpdated(idd: "o1") { id } }"#)
+            )
+            Issue.record("Expected the subscription to be rejected")
+        } catch let error as GraphQLError {
+            #expect(error.message.contains("Unknown argument 'idd'"))
+            #expect(error.message.contains("Did you mean 'id'?"))
+        }
+    }
+
+    @Test func subscribingWithAMistypedArgumentIsRejected() async throws {
+        let engine = try await makeShopEngine()
+        await #expect(throws: GraphQLError.self) {
+            _ = try await engine.subscribe(
+                GraphQLRequest(query: "subscription { orderUpdated(id: true) { id } }")
+            )
+        }
+    }
+
+    @Test func subscriptionArgumentsAcceptVariables() async throws {
+        let engine = try await makeShopEngine()
+        let stream = try await engine.subscribe(
+            GraphQLRequest(
+                query: "subscription S($id: ID!) { orderUpdated(id: $id) { id } }",
+                variables: ["id": "order-7"]
+            )
+        )
+        try await engine.publish("orderUpdated", payload: ["id": "order-7"])
+        var iterator = stream.makeAsyncIterator()
+        let event = try #require(await iterator.next())
+        #expect(event.data?["orderUpdated"]["id"] == .string("order-7"))
+        await engine.shutdown()
+    }
+
+    @Test func subscriptionRootFragmentIsExpanded() async throws {
+        let engine = try await makeShopEngine()
+        let stream = try await engine.subscribe(
+            GraphQLRequest(
+                query: """
+                    subscription { ...Changed }
+                    fragment Changed on Subscription { orderStatusChanged { id } }
+                    """
+            )
+        )
+        try await engine.publish("orderStatusChanged", payload: ["id": "order-1"])
+        var iterator = stream.makeAsyncIterator()
+        let event = try #require(await iterator.next())
+        #expect(event.data?["orderStatusChanged"]["id"] == .string("order-1"))
+        await engine.shutdown()
+    }
+
+    @Test func subscriptionNullViolationNamesTheSubscriptionType() async throws {
+        let engine = try await makeShopEngine()
+        let stream = try await engine.subscribe(
+            GraphQLRequest(query: "subscription { orderStatusChanged { id } }")
+        )
+        try await engine.publish("orderStatusChanged", payload: .null)
+        var iterator = stream.makeAsyncIterator()
+        let event = try #require(await iterator.next())
+        #expect(
+            event.errors.map(\.message)
+                == ["Cannot return null for non-nullable field 'Subscription.orderStatusChanged'"]
+        )
+        await engine.shutdown()
+    }
+
     @Test func executeRejectsSubscriptionOperations() async throws {
         let engine = try await makeShopEngine()
         let response = await engine.execute(
@@ -462,7 +858,7 @@ private func makeShopEngine(
     @Test func injectedStoreMergesSeedInsteadOfReplacing() async throws {
         // A sibling service (e.g. MockREST) already put state in the shared store.
         let store = StateStore()
-        await store.withMutationState { state in
+        _ = await store.withMutationState { state in
             state.insert("Product", ["id": "existing-1", "name": "Pre-seeded", "priceCents": 100])
         }
 

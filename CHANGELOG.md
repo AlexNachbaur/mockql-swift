@@ -7,6 +7,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixes from the October 2026 audit (finding ids `MQ-…` in the workspace `AUDIT.md`). Several are
+**behaviour changes**: MockQL now rejects things it used to accept in silence. Each one is a case
+where the mock was more lenient than the real server it stands in for — which is exactly how a
+test passes against the mock and the feature fails in production.
+
+### Added
+
+- **Backward pagination: `last` and `before`.** Connections now implement the whole Relay cursor
+  algorithm — `after`/`before` narrow the window, then `first` keeps its head and `last` its
+  tail — with `hasNextPage`/`hasPreviousPage` reported accordingly. The two arguments were
+  previously accepted and ignored, so "load previous messages" silently returned the first page
+  again. (MQ-7)
+- **`MockQLServer.start(diagnostics:store:)`.** The engine has taken both for a while; the server
+  facade most tests actually call could pass neither, so turning on query diagnostics or sharing
+  a `StateStore` with a sibling service meant abandoning the convenience initializer. Both
+  default to their previous behaviour. (MQ-12)
+- **Queries and mutations over the WebSocket.** `graphql-transport-ws` lets `subscribe` carry any
+  operation, and clients configured to send everything down one socket do exactly that. A query
+  or mutation now yields a single `next` and then `complete`; it used to be refused with
+  "subscribe(_:) requires a subscription operation". (MQ-9)
+- **Surrogate-pair and braced unicode escapes in string literals.** `"\uD83D\uDE00"` — how
+  JSON-minded tooling writes anything outside the Basic Multilingual Plane — and `"\u{1F600}"`
+  both lex to the one character they mean. Each half of a pair was previously rejected as an
+  invalid escape, so an operation carrying an escaped emoji failed to parse. (MQ-16)
+
+### Changed
+
+- **`GET` no longer executes mutations.** A mutation sent as `GET /graphql?query=mutation…` is
+  refused with `405 Method Not Allowed` (`Allow: POST`) and a GraphQL error body, and its handler
+  does not run. `GET` must be safe to repeat and prefetch; a real GraphQL-over-HTTP server
+  refuses this, and an app that depended on it working would only find out in production. (MQ-22)
+- **`Int` is range-checked to 32 bits.** An `Int` argument or variable outside
+  −2,147,483,648…2,147,483,647 is now a `BAD_INPUT` error naming the value, as the specification
+  requires and real servers enforce. If a schema carries millisecond timestamps or large ids in
+  `Int`, the real server is already rejecting them — use `Float` or a custom scalar. (MQ-18)
+- **A negative `first` or `last` is an error**, not "no limit": the field fails with
+  `Argument 'first' of 'Query.products' must be a non-negative integer, found -1`. (MQ-7)
+- **Subscription arguments are validated when the client subscribes.** They were never coerced at
+  all, so `orderUpdated` could be subscribed to without its required `id: ID!`, or with an
+  argument that doesn't exist, and the client simply waited on a stream that was never valid.
+  Missing, unknown (with a "did you mean"), and mistyped arguments now fail the subscription up
+  front — over the socket, as a protocol `error`. (MQ-8)
+- **Schemas are checked for interface conformance and default-value types at load.** A type that
+  declares `implements Node` must now provide every field of `Node`, with a compatible type and
+  the same arguments; an argument or input-field default must be a valid value of its declared
+  type (`first: Int = "ten"` and a misspelt enum default are load errors, the latter with a
+  suggestion). Both used to load cleanly and then fail — or quietly misbehave — on whichever
+  request first relied on them. (MQ-21)
+- **Ambiguous configuration is rejected instead of resolved by position.** Inside a
+  configuration block, these now throw a `configuration` error before the engine starts: a
+  `Seed` given a literal that isn't an object of fields (it used to become an empty record), a
+  `Seed` with two `Value`s for the same field, two `Root`s for the same field, and — over an SDL
+  schema — two `Object` blocks binding a generator to the same field. In each case the last one
+  used to win without a word. (MQ-20)
+- **An undeclared variable is reported as such.** `Variable '$x' was not provided` covered two
+  different mistakes; now that a declared-but-omitted variable is legal (see Fixed), what remains
+  is a variable the operation never declared, and the message says so:
+  `Variable '$x' is not declared by this operation.`, with a suggestion drawn from the variables
+  it does declare.
+- **A null in a non-null position is reported once, and says what was null.** A null element of
+  `[Item!]!` produced up to three errors — one for the element (labelled as the field), one for
+  the list, and one more per non-null ancestor. There is now exactly one, at the element's path:
+  `Cannot return null for non-nullable element 1 of list field 'Cart.items'`. Likewise, when a
+  specific error already explains the null (a dangling reference, say), no generic
+  `Cannot return null…` is stacked on top of it. (MQ-19)
+- **Source columns count Unicode scalars**, as the specification defines source text, rather than
+  Swift grapheme clusters. Locations in ASCII documents are unchanged; a column that follows a
+  multi-scalar character (a decomposed accent, a flag emoji) on the same line shifts right.
+  (MQ-16)
+
+### Fixed
+
+- **An interface narrowed to a sub-interface no longer fails schema validation.** The
+  conformance check added below resolved covariance through the list of *object* implementors
+  only, so `interface Named implements Node` could not stand in for a field declared as `Node`
+  — valid SDL that was rejected at startup (found in review). `Schema.InterfaceType` now carries
+  `interfaces`, interfaces are checked against the interfaces they implement, and covariance
+  walks them.
+- **A `Resolve` on a root `Mutation` or `Subscription` field is rejected at startup** instead
+  of being accepted and never run. The handler (or `publish`) produces that value and the
+  executor passes it through, so the hook could not fire; a configured hook that silently does
+  nothing is the kind of leniency this release removes. `Filter` on those fields still applies.
+- **Request errors omit `data` rather than carrying `null`.** The spec (§7.1.2) distinguishes an
+  error raised before execution — `data` absent — from a failed execution — `data: null`. Over
+  the WebSocket these now arrive as a terminal `error` message, as the protocol expects, rather
+  than a `next`.
+- **A WebSocket text message is capped at 16 MiB, and a `continuation` frame with no message to
+  continue closes the socket with 1002.** NIO caps each frame; a client sending endless
+  non-final continuation frames could otherwise grow memory without bound.
+- The `405` for a `GET` mutation lists `Allow: GET, POST` — the methods the resource supports,
+  per RFC 9110 — rather than `POST` alone.
+- **Request errors were swallowed, leaving `{"data": null}` and nothing else.** An unknown
+  fragment spread, a `@skip`/`@include` with a missing or non-Boolean `if`, or an undeclared
+  variable in a directive threw inside the executor, and the top-level `catch` discarded the
+  error on its way to returning null. The client saw a failed request with no reason — from the
+  app's side, indistinguishable from a legitimately empty result. The error is now in `errors`,
+  with its location and suggestion. (MQ-1)
+- **Omitting a nullable variable was an error.** `query Q($n: Int) { products(first: $n) }` sent
+  without `n` failed with "Variable '$n' was not provided". The specification says a declared
+  variable with no value makes the argument *absent*, so its default applies — and that is the
+  ordinary case for every client that only sends the variables the caller set. (MQ-2)
+- **The mutation root ignored `@skip`/`@include`, rejected fragments, and could run a handler
+  twice.** A mutation field under `@skip(if: true)` ran its handler and changed state anyway.
+  A fragment spread at the mutation root was refused outright. Two selections of the same
+  response key ran the handler once each. The mutation root is now collected exactly as a query's
+  is: directives are honored, fragments are expanded, and fields sharing a response key run once
+  with their selection sets merged. (MQ-3)
+- **`Filter` and `Resolve` hooks, and query diagnostics, did not apply inside mutation payloads
+  or subscription events.** The same field — `Board.cards(minPoints:)` — returned different
+  results depending on whether a query, a mutation's payload, or a subscription event reached
+  it, because only the query path was handed the hooks. All three now behave identically, and
+  `diagnostics: true` reports on all three. (MQ-5)
+- **A mutation's null-violation error blamed the `Query` type, and its pagination arguments were
+  dropped.** `Cannot return null for non-nullable field 'Query.updateDisplayName'` now names
+  `Mutation` (or `Subscription`); and a mutation returning a connection honors its own
+  `first`/`after`/`last`/`before`. A handler's return value is otherwise passed through as
+  given — it is never re-filtered by the mutation's own arguments. (MQ-6)
+- **A cursor with a negative index crashed the process.** `after: "cursor:-9"` computed a
+  negative array index and trapped, taking the test host down with it. Cursors pointing outside
+  the list now clamp to it and yield an empty page.
+- **WebSocket: `complete` followed `error`; a reused id could be evicted; split characters were
+  corrupted.** `error` is terminal in `graphql-transport-ws`, but a `complete` was sent after it.
+  When a client completed an operation and immediately reused its id, the finished operation's
+  cleanup removed the *new* one from the connection's bookkeeping (and announced a stale
+  `complete` for it). And a fragmented text message was decoded frame by frame, so a multi-byte
+  UTF-8 character straddling two frames turned into replacement characters; frames are now
+  joined before decoding, and a message that is not valid UTF-8 closes the socket with 1007.
+  (MQ-9)
+- **Combining marks confused the lexer.** Lexing by grapheme cluster meant a `"` followed by a
+  combining mark was no longer recognised as a quote, and a letter carrying a combining mark with
+  no precomposed form (`b` + U+0301) passed as a name character. The lexer now works on Unicode
+  scalars, and names are ASCII-only as the grammar says. (MQ-16)
+- **Building MockQL as a dependency emitted four "result unused" warnings** from the SDL parser,
+  and the DocC build emitted eight more that the local documentation step should have been
+  failing on. Both are clean. (MQ-15)
+
+### Documentation
+
+- Every public declaration now has a doc comment — `Schema`'s nested types and their properties,
+  the result-builder statics, and the `MockService` members among them. (MQ-14)
+- `docs/design/architecture.md` describes the module layout as it is since the MockCore
+  extraction (no `SchemaBuilder DSL` or `SeedDocument`; the value model, store, and generators
+  live in MockCore; Yams is not a direct dependency). The README no longer implies the WebSocket
+  integration tests run on all five platforms — they run on Apple platforms only — and
+  `docs/design/README.md` points at the shipped documentation instead of listing it as planned.
+  (MQ-13)
+
 ## [0.5.0] - 2026-08-02
 
 ### Added
@@ -189,6 +336,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`MockQLCore` portable engine + `MockQL` SwiftNIO transport) with Yams and SwiftNIO
   dependencies declared.
 
-[Unreleased]: https://github.com/AlexNachbaur/mockql-swift/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/AlexNachbaur/mockql-swift/compare/0.5.0...HEAD
+[0.5.0]: https://github.com/AlexNachbaur/mockql-swift/compare/0.4.1...0.5.0
+[0.4.1]: https://github.com/AlexNachbaur/mockql-swift/compare/0.4.0...0.4.1
+[0.4.0]: https://github.com/AlexNachbaur/mockql-swift/compare/0.3.0...0.4.0
+[0.3.0]: https://github.com/AlexNachbaur/mockql-swift/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/AlexNachbaur/mockql-swift/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/AlexNachbaur/mockql-swift/releases/tag/0.1.0
