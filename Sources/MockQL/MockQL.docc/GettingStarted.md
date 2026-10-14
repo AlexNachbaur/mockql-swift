@@ -88,6 +88,14 @@ Every server exposes `GET /health` and supports plain GET queries for quick manu
 curl 'http://127.0.0.1:PORT/graphql?query={currentUser{name}}'
 ```
 
+`GET` runs queries only. A mutation sent by `GET` is refused with `405 Method Not Allowed` and
+is not executed, so nothing that merely follows a link can change the server's state; send
+mutations with `POST`.
+
+When a list comes back unexpectedly empty — or unexpectedly full — start the server with
+`diagnostics: true` and read `extensions.mockql.fields` in the response to see which arguments
+filtered it.
+
 ## Next steps
 
 - <doc:XCUITestIntegration> for the full test-suite pattern.

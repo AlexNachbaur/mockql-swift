@@ -25,6 +25,8 @@ public final class MockQLEngine: Sendable {
     ///   - generatorBindings: Generators keyed by `"Type.field"` for fields absent from seed
     ///     data.
     ///   - serverSeed: Seed for deterministic data generation; equal seeds generate equal data.
+    ///   - diagnostics: Whether to report, under `extensions.mockql.fields`, how each list- and
+    ///     connection-typed field was filtered (see ``FieldDiagnostics``). Off by default.
     ///   - store: The state store to use — pass a sibling service's store (e.g. MockREST's) to
     ///     share state across protocols on one `MockHost`. Omit for a store of its own.
     ///   - configuration: Declarations — mutation handlers, seeds, roots, generator bindings,
@@ -116,21 +118,42 @@ public final class MockQLEngine: Sendable {
         document: ExecutableDocument,
         variables: [String: GraphQLValue]
     ) async -> GraphQLResponse {
-        var executor = Executor(
-            schema: schema,
-            generators: generators,
+        var executor = makeExecutor(
             data: await store.snapshot(),
             fragments: document.fragments,
             variables: variables,
-            filters: filters,
-            resolvers: resolvers,
-            diagnosticsEnabled: diagnosticsEnabled
+            declaredVariables: operation.declaredVariableNames
         )
         let data = executor.executeQuery(selections: operation.selectionSet)
+        if executor.requestFailed {
+            return .requestFailed(executor.errors)
+        }
         return GraphQLResponse(
             data: data,
             errors: executor.errors,
             extensions: executor.diagnostics.mockQLExtensions
+        )
+    }
+
+    /// An executor over `data` carrying this engine's hooks and diagnostics setting, so a field
+    /// behaves the same whether it is reached from a query, a mutation payload, or a
+    /// subscription event.
+    private func makeExecutor(
+        data: StoreData,
+        fragments: [String: FragmentDefinitionNode],
+        variables: [String: GraphQLValue],
+        declaredVariables: Set<String>
+    ) -> Executor {
+        Executor(
+            schema: schema,
+            generators: generators,
+            data: data,
+            fragments: fragments,
+            variables: variables,
+            declaredVariables: declaredVariables,
+            filters: filters,
+            resolvers: resolvers,
+            diagnosticsEnabled: diagnosticsEnabled
         )
     }
 
@@ -144,20 +167,37 @@ public final class MockQLEngine: Sendable {
         else {
             return .requestFailed([GraphQLError(message: "Schema defines no mutation root type")])
         }
+        let declaredVariables = operation.declaredVariableNames
+        // Field collection and argument coercion are pure schema work and read no state, so the
+        // planner runs over an empty store rather than taking a snapshot it would never look at.
+        var planner = makeExecutor(
+            data: StoreData(),
+            fragments: document.fragments,
+            variables: variables,
+            declaredVariables: declaredVariables
+        )
+        // Collected exactly as a query's root is: `@skip`/`@include` are honored, fragments are
+        // expanded, and fields sharing a response key are grouped so their handler runs once.
+        let rootFields: [(key: String, nodes: [FieldNode])]
+        do {
+            rootFields = try planner.collectRootFields(operation.selectionSet, typeName: mutationTypeName)
+        } catch let error as GraphQLError {
+            // Raised before any handler ran: a request error, so `data` is absent (§7.1.2).
+            return .requestFailed([error])
+        } catch {
+            return .requestFailed([GraphQLError(message: String(describing: error))])
+        }
+
         var result: [String: GraphQLValue] = [:]
         var errors: [GraphQLError] = []
+        var diagnostics: [String: FieldDiagnostics] = [:]
         var dataIsNull = false
 
-        for selection in operation.selectionSet {
-            guard case .field(let field) = selection else {
-                errors.append(
-                    GraphQLError(message: "Mutation root selections must be plain fields (no fragments)")
-                )
-                continue
-            }
-            let path: [GraphQLPathSegment] = [.field(field.responseKey)]
+        for (responseKey, nodes) in rootFields {
+            guard let field = nodes.first else { continue }
+            let path: [GraphQLPathSegment] = [.field(responseKey)]
             if field.name == "__typename" {
-                result[field.responseKey] = .string(mutationTypeName)
+                result[responseKey] = .string(mutationTypeName)
                 continue
             }
             guard let fieldDef = mutationType.field(named: field.name) else {
@@ -169,7 +209,7 @@ public final class MockQLEngine: Sendable {
                         path: path
                     )
                 )
-                result[field.responseKey] = .null
+                result[responseKey] = .null
                 continue
             }
             guard let handler = handlers[field.name] else {
@@ -182,22 +222,14 @@ public final class MockQLEngine: Sendable {
                         path: path
                     )
                 )
-                result[field.responseKey] = .null
+                result[responseKey] = .null
                 dataIsNull = dataIsNull || fieldDef.type.isNonNull
                 continue
             }
 
-            // Coerce arguments against the pre-mutation snapshot's executor (pure schema work).
-            var argumentExecutor = Executor(
-                schema: schema,
-                generators: generators,
-                data: await store.snapshot(),
-                fragments: document.fragments,
-                variables: variables
-            )
             let input: GraphQLValue
             do {
-                input = try argumentExecutor.coerceArguments(
+                input = try planner.coerceArguments(
                     fieldDef,
                     nodes: field.arguments,
                     location: field.location,
@@ -205,12 +237,12 @@ public final class MockQLEngine: Sendable {
                 )
             } catch let error as GraphQLError {
                 errors.append(error)
-                result[field.responseKey] = .null
+                result[responseKey] = .null
                 dataIsNull = dataIsNull || fieldDef.type.isNonNull
                 continue
             } catch {
                 errors.append(GraphQLError(message: String(describing: error), path: path))
-                result[field.responseKey] = .null
+                result[responseKey] = .null
                 dataIsNull = dataIsNull || fieldDef.type.isNonNull
                 continue
             }
@@ -225,7 +257,7 @@ public final class MockQLEngine: Sendable {
                 errors.append(
                     GraphQLError(message: error.message, locations: [field.location], path: path)
                 )
-                result[field.responseKey] = .null
+                result[responseKey] = .null
                 dataIsNull = dataIsNull || fieldDef.type.isNonNull
                 continue
             } catch {
@@ -236,36 +268,48 @@ public final class MockQLEngine: Sendable {
                         path: path
                     )
                 )
-                result[field.responseKey] = .null
+                result[responseKey] = .null
                 dataIsNull = dataIsNull || fieldDef.type.isNonNull
                 continue
             }
 
-            var resolver = Executor(
-                schema: schema,
-                generators: generators,
+            var resolver = makeExecutor(
                 data: await store.snapshot(),
                 fragments: document.fragments,
-                variables: variables
+                variables: variables,
+                declaredVariables: declaredVariables
             )
             let value = resolver.resolveValue(
                 handlerResult,
                 ofType: fieldDef.type,
-                selections: field.selectionSet,
+                selections: nodes.flatMap(\.selectionSet),
                 fieldName: field.name,
+                parentTypeName: mutationTypeName,
+                arguments: input,
                 path: path
             )
             errors.append(contentsOf: resolver.errors)
-            result[field.responseKey] = value
+            for (fieldKey, entry) in resolver.diagnostics {
+                diagnostics[fieldKey, default: FieldDiagnostics()].merge(entry)
+            }
+            result[responseKey] = value
             dataIsNull = dataIsNull || (fieldDef.type.isNonNull && value.isNull)
         }
-        return GraphQLResponse(data: dataIsNull ? .null : .object(result), errors: errors)
+        return GraphQLResponse(
+            data: dataIsNull ? .null : .object(result),
+            errors: errors,
+            extensions: diagnostics.mockQLExtensions
+        )
     }
 
     // MARK: - Subscriptions
 
     /// Starts a subscription and returns its event stream. Events arrive when test code calls
     /// ``publish(_:payload:)``. The stream ends when the task consuming it is cancelled.
+    ///
+    /// The root field's arguments are coerced and validated here, exactly as a query's or
+    /// mutation's are, so a missing required argument or a mistyped one fails the subscription
+    /// up front instead of leaving a client waiting on a stream that was never valid.
     public func subscribe(_ request: GraphQLRequest) async throws -> AsyncStream<GraphQLResponse> {
         let document = try parseDocument(request.query)
         let operation = try document.operation(named: request.operationName)
@@ -278,26 +322,41 @@ public final class MockQLEngine: Sendable {
         else {
             throw GraphQLError(message: "Schema defines no subscription root type")
         }
-        let rootFields = operation.selectionSet.compactMap { selection -> FieldNode? in
-            if case .field(let field) = selection { return field }
-            return nil
-        }
-        guard rootFields.count == 1, let rootField = rootFields.first,
-            rootFields.count == operation.selectionSet.count
-        else {
+        let declaredVariables = operation.declaredVariableNames
+        var planner = makeExecutor(
+            data: StoreData(),
+            fragments: document.fragments,
+            variables: variables,
+            declaredVariables: declaredVariables
+        )
+        let rootFields = try planner.collectRootFields(operation.selectionSet, typeName: subscriptionTypeName)
+        guard rootFields.count == 1, let nodes = rootFields.first?.nodes, let rootField = nodes.first else {
             throw GraphQLError(message: "A subscription must select exactly one root field")
         }
         guard let fieldDef = subscriptionType.field(named: rootField.name) else {
             let clause = Suggestion.clause(for: rootField.name, in: subscriptionType.fields.map(\.name))
-            throw GraphQLError(message: "Unknown subscription field '\(rootField.name)'.\(clause)")
+            throw GraphQLError(
+                message: "Unknown subscription field '\(rootField.name)'.\(clause)",
+                locations: [rootField.location]
+            )
         }
+        let arguments = try planner.coerceArguments(
+            fieldDef,
+            nodes: rootField.arguments,
+            location: rootField.location,
+            path: [.field(rootField.responseKey)]
+        )
         return await hub.register(
-            rootField: rootField.name,
-            responseKey: rootField.responseKey,
-            fieldType: fieldDef.type,
-            selections: rootField.selectionSet,
-            fragments: document.fragments,
-            variables: variables
+            SubscriptionHub.Subscriber(
+                rootField: rootField.name,
+                responseKey: rootField.responseKey,
+                fieldType: fieldDef.type,
+                arguments: arguments,
+                selections: nodes.flatMap(\.selectionSet),
+                fragments: document.fragments,
+                variables: variables,
+                declaredVariables: declaredVariables
+            )
         )
     }
 
@@ -322,26 +381,28 @@ public final class MockQLEngine: Sendable {
         let subscribers = await hub.subscribers(to: field)
         guard !subscribers.isEmpty else { return }
         let snapshot = await store.snapshot()
-        for subscriber in subscribers {
-            var executor = Executor(
-                schema: schema,
-                generators: generators,
+        for (subscriber, continuation) in subscribers {
+            var executor = makeExecutor(
                 data: snapshot,
                 fragments: subscriber.fragments,
-                variables: subscriber.variables
+                variables: subscriber.variables,
+                declaredVariables: subscriber.declaredVariables
             )
             let value = executor.resolveValue(
                 payload,
                 ofType: subscriber.fieldType,
                 selections: subscriber.selections,
                 fieldName: field,
+                parentTypeName: subscriptionTypeName,
+                arguments: subscriber.arguments,
                 path: [.field(subscriber.responseKey)]
             )
             let response = GraphQLResponse(
                 data: .object([subscriber.responseKey: value]),
-                errors: executor.errors
+                errors: executor.errors,
+                extensions: executor.diagnostics.mockQLExtensions
             )
-            subscriber.continuation.yield(response)
+            continuation.yield(response)
         }
     }
 
@@ -353,6 +414,23 @@ public final class MockQLEngine: Sendable {
     /// Ends all subscription streams.
     public func shutdown() async {
         await hub.finishAll()
+    }
+
+    // MARK: - Transport support
+
+    /// The type of the operation `request` would run, or `nil` when its document does not parse
+    /// or does not identify a single operation (in which case ``execute(_:)`` reports why).
+    ///
+    /// Transports need this before executing: GraphQL over HTTP must refuse a mutation sent by
+    /// `GET`, and `graphql-transport-ws` routes subscriptions and single-result operations
+    /// differently.
+    package func operationType(of request: GraphQLRequest) -> OperationType? {
+        guard let document = try? parseDocument(request.query),
+            let operation = try? document.operation(named: request.operationName)
+        else {
+            return nil
+        }
+        return operation.type
     }
 
     // MARK: - Helpers

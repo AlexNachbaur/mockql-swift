@@ -214,23 +214,53 @@ public struct Seed: MockQLDeclaration {
     let typeName: String
     let id: String?
     let fields: [String: GraphQLValue]
+    /// What is wrong with this declaration, if anything. The initializers can't throw — they
+    /// run inside a result builder — so the problem is carried here and raised when the
+    /// configuration block is assembled, before the engine starts.
+    let problem: String?
 
     /// Seeds a record from builder values.
+    ///
+    /// Each field may be given once; a repeated `Value` for the same field fails configuration
+    /// rather than letting the last one quietly win.
     public init(_ typeName: String, id: String? = nil, @SeedValueBuilder _ values: () -> [Value]) {
         self.typeName = typeName
         self.id = id
         var fields: [String: GraphQLValue] = [:]
+        var problem: String?
         for value in values() {
+            if fields[value.name] != nil, problem == nil {
+                problem =
+                    "\(Self.label(typeName, id: id)) sets field '\(value.name)' more than once; keep one Value"
+            }
             fields[value.name] = value.value
         }
         self.fields = fields
+        self.problem = problem
     }
 
-    /// Seeds a record from a value literal.
+    /// Seeds a record from a value literal, which must be an object of field values
+    /// (`["name": "Espresso Machine", "priceCents": 64900]`). Anything else fails configuration.
     public init(_ typeName: String, id: String? = nil, _ fields: GraphQLValue) {
         self.typeName = typeName
         self.id = id
-        self.fields = fields.objectValue ?? [:]
+        if let object = fields.objectValue {
+            self.fields = object
+            self.problem = nil
+        } else {
+            self.fields = [:]
+            self.problem =
+                "\(Self.label(typeName, id: id)) expects an object of field values, such as "
+                + "[\"name\": \"…\"], but found \(fields)"
+        }
+    }
+
+    /// How this declaration is named in a configuration error.
+    private static func label(_ typeName: String, id: String?) -> String {
+        if let id {
+            return "Seed(\"\(typeName)\", id: \"\(id)\")"
+        }
+        return "Seed(\"\(typeName)\")"
     }
 }
 
