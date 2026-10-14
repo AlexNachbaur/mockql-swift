@@ -12,9 +12,12 @@ same `serverSeed`. Asserting on generated values in tests is safe.
 Resolution order for a field:
 
 1. An explicit binding for `"Type.field"`.
-2. Field-name inference: `email`-ish names get emails, `phone` gets phone numbers, `url`/`link`
-   get URLs, `firstName`/`lastName`/`name`/`title` get names, `description`/`bio` get
-   sentences, and date-like names (or scalar types like `DateTime`) get ISO-8601 timestamps.
+2. Field-name inference, by whole word (`createdAt`, `created_at`, `avatarURL`, and plurals
+   such as `emails` all count): `email` gets emails, `phone` gets phone numbers, `url`/`link`
+   get URLs, `firstName`/`lastName`/`name`/`nickname` get names, and date-like names
+   (`…At`, `…Date`, or scalar types like `DateTime`) get ISO-8601 timestamps. A word that merely
+   contains a trigger (`updated`, `hourly`, `title`) does not match. (MockCore 0.1.2 matched by
+   substring; the word rules arrive with the next MockCore release.)
 3. A type-appropriate default: UUIDs for `ID`, ranged ints/floats, booleans, sentences for
    `String`, a stable member for enums.
 

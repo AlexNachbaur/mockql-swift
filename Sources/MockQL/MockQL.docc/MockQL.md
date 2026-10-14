@@ -55,8 +55,8 @@ A started server exposes:
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /graphql` | Standard GraphQL-over-HTTP (JSON body) |
-| `GET /graphql?query=…` | Quick manual checks from a browser or curl |
-| WebSocket `/graphql` | Subscriptions via the `graphql-transport-ws` protocol |
+| `GET /graphql?query=…` | Quick manual checks from a browser or curl. Queries only: a mutation sent by `GET` is refused with `405` |
+| WebSocket `/graphql` | The `graphql-transport-ws` protocol: subscriptions, plus queries and mutations for clients that send everything over one socket |
 | `GET /health` | Readiness probe |
 
 ## Topics

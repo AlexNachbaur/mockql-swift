@@ -135,6 +135,10 @@ try await server.publish("orderStatusChanged", payload: [
 ])
 ```
 
+A subscription whose arguments are missing or mistyped is rejected when the client subscribes
+(a protocol `error` message), not silently accepted. Queries and mutations may also be sent over
+the socket with `subscribe`; each yields one `next`, then `complete`.
+
 Publishing to zero subscribers is a silent no-op. If the test subscribes over the socket first,
 wait for registration before publishing:
 
@@ -168,6 +172,12 @@ while await server.engine.activeSubscriptionCount() == 0 {
 | `Explicit null is not allowed for non-null type` | `null` on a `Type!` field | Remove it or make the schema field nullable |
 | `No handler registered for mutation '…'` (at runtime) | App called a mutation you didn't handle | Add `Mutation("…") { input, state in … }` |
 | `missing 'version: 1'` | Seed file lacks the version key | Add `version: 1` at the top |
+| `implements '…' but does not define its field` | An SDL type doesn't satisfy an interface it declares | Add the field (with a compatible type) to the type |
+| `for the default value of argument` | An SDL default doesn't match its declared type | Fix the default or the type |
+| `is declared more than once` / `sets field '…' more than once` | The same `Root`, generator binding, or seeded field appears twice in the configuration block | Keep one |
+| `outside the signed 32-bit range` (at runtime) | An `Int` argument or variable exceeds GraphQL's 32-bit `Int` | Use `Float` or a custom scalar in the schema, as the real server must |
+| `Mutations must be sent with POST` (HTTP 405) | The app sent a mutation as a `GET` | Send mutations with `POST` |
+| `Variable '$…' is not declared by this operation` (at runtime) | The operation uses a variable its signature doesn't declare | Declare it, or apply the suggestion |
 
 ## Verify your integration
 

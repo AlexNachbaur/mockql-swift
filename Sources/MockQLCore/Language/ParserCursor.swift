@@ -30,6 +30,7 @@ struct ParserCursor {
     }
 
     /// Consumes the current token when it matches `kind`.
+    @discardableResult
     mutating func match(_ kind: Token.Kind) -> Bool {
         guard current.kind == kind else { return false }
         advance()
@@ -37,6 +38,7 @@ struct ParserCursor {
     }
 
     /// Consumes the current token when it is the given (contextual) keyword name.
+    @discardableResult
     mutating func matchKeyword(_ keyword: String) -> Bool {
         guard current.nameValue == keyword else { return false }
         advance()

@@ -60,6 +60,11 @@ try await server.publish("orderStatusChanged", payload: […])
 ## Wire protocol
 
 The server module speaks `graphql-transport-ws` — `connection_init`/`connection_ack`,
-`subscribe`/`next`/`complete`, `ping`/`pong`, and the protocol's close codes — which is what
-Apollo, urql, and Relay clients use out of the box. Point clients at the server's
+`subscribe`/`next`/`error`/`complete`, `ping`/`pong`, and the protocol's close codes — which is
+what Apollo, urql, and Relay clients use out of the box. Point clients at the server's
 `webSocketURL`.
+
+A subscription that can't start — an unknown field, a missing required argument, an argument of
+the wrong type — is answered with a single `error` message, which ends it; no `complete`
+follows. `subscribe` also accepts queries and mutations, for clients that route every operation
+over the socket: each produces one `next` carrying its result, then `complete`.

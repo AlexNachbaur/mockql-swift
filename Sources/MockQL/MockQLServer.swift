@@ -67,6 +67,11 @@ public final class MockQLServer: Sendable {
     ///   - seed: Initial state, validated before the server starts accepting connections.
     ///   - generators: Generators keyed by `"Type.field"`.
     ///   - serverSeed: Seed for deterministic generated data.
+    ///   - diagnostics: Whether responses report, under `extensions.mockql.fields`, how each
+    ///     list- and connection-typed field was filtered. Off by default; turn it on when a
+    ///     list comes back unexpectedly empty or unexpectedly full.
+    ///   - store: The state store to use — pass a sibling service's store (e.g. MockREST's) to
+    ///     share state across protocols. Omit for a store of the server's own.
     ///   - host: Interface to bind; loopback by default — MockQL is a test tool and should not
     ///     be exposed to real networks.
     ///   - port: Port to bind; `0` picks an ephemeral free port (recommended for parallel tests).
@@ -79,6 +84,8 @@ public final class MockQLServer: Sendable {
         seed: SeedSource? = nil,
         generators: [String: FieldGenerator] = [:],
         serverSeed: UInt64 = 0,
+        diagnostics: Bool = false,
+        store: StateStore? = nil,
         host: String = "127.0.0.1",
         port: Int = 0,
         httpPath: String = "/graphql",
@@ -90,6 +97,8 @@ public final class MockQLServer: Sendable {
             seed: seed,
             generators: generators,
             serverSeed: serverSeed,
+            diagnostics: diagnostics,
+            store: store,
             configuration: configuration
         )
         return try await start(
@@ -104,6 +113,10 @@ public final class MockQLServer: Sendable {
     /// Starts a server wrapping an existing engine.
     ///
     /// - Parameters:
+    ///   - engine: The engine to serve. Configure diagnostics or a shared store on the engine
+    ///     itself.
+    ///   - host: Interface to bind; loopback by default.
+    ///   - port: Port to bind; `0` picks an ephemeral free port.
     ///   - httpPath: Path serving GraphQL over HTTP. Defaults to `/graphql`.
     ///   - subscriptionPath: Path answering the `graphql-transport-ws` upgrade. Defaults to `/graphql`.
     public static func start(

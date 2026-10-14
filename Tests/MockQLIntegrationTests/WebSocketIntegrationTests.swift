@@ -156,6 +156,165 @@ import Testing
             try await server.stop()
         }
 
+        private func connect(to server: MockQLServer) async throws -> GraphQLWSClient {
+            let client = GraphQLWSClient(url: server.webSocketURL)
+            try await client.send(["type": "connection_init"])
+            _ = try await withTimeout { try await client.receive(type: "connection_ack") }
+            return client
+        }
+
+        @Test func errorIsTerminalAndNotFollowedByComplete() async throws {
+            let server = try await startServer()
+            let client = try await connect(to: server)
+
+            try await client.send([
+                "type": "subscribe",
+                "id": "bad",
+                "payload": ["query": "subscription { orderStatusChange { id } }"],
+            ])
+            let error = try await withTimeout { try await client.receive() }
+            #expect(error["type"] == .string("error"))
+            #expect(error["id"] == .string("bad"))
+            #expect(error["payload"][0]["message"].stringValue?.contains("Did you mean 'orderStatusChanged'?") == true)
+
+            // Whatever the server says next must be the answer to this ping, not a `complete`.
+            try await client.send(["type": "ping"])
+            let next = try await withTimeout { try await client.receive() }
+            #expect(next["type"] == .string("pong"))
+
+            client.close()
+            try await server.stop()
+        }
+
+        @Test func queryOverTheSocketYieldsOneResultThenCompletes() async throws {
+            let server = try await startServer()
+            let client = try await connect(to: server)
+
+            try await client.send([
+                "type": "subscribe",
+                "id": "q1",
+                "payload": ["query": "{ currentUser { name } }"],
+            ])
+            let result = try await withTimeout { try await client.receive() }
+            #expect(result["type"] == .string("next"))
+            #expect(result["id"] == .string("q1"))
+            #expect(result["payload"]["data"]["currentUser"]["name"] == .string("Avery Quinn"))
+            let complete = try await withTimeout { try await client.receive() }
+            #expect(complete["type"] == .string("complete"))
+            #expect(complete["id"] == .string("q1"))
+
+            client.close()
+            try await server.stop()
+        }
+
+        @Test func mutationOverTheSocketChangesState() async throws {
+            let server = try await MockQLServer.start(
+                schema: .file(try fixturePath("shop", extension: "graphqls")),
+                seed: .file(try fixturePath("checkout", extension: "yaml"))
+            ) {
+                Mutation("updateDisplayName") { input, state in
+                    state.update("User", id: "user-1") { $0["name"] = input["name"] }
+                    return state["User", id: "user-1"]
+                }
+            }
+            let client = try await connect(to: server)
+
+            try await client.send([
+                "type": "subscribe",
+                "id": "m1",
+                "payload": [
+                    "query": "mutation Rename($name: String!) { updateDisplayName(name: $name) { name } }",
+                    "variables": ["name": "Socket Renamed"],
+                ],
+            ])
+            let result = try await withTimeout { try await client.receive() }
+            #expect(result["type"] == .string("next"))
+            #expect(result["payload"]["data"]["updateDisplayName"]["name"] == .string("Socket Renamed"))
+            let complete = try await withTimeout { try await client.receive() }
+            #expect(complete["type"] == .string("complete"))
+
+            let (_, body) = try await post("{ currentUser { name } }", to: server.url)
+            #expect(body["data"]["currentUser"]["name"] == .string("Socket Renamed"))
+
+            client.close()
+            try await server.stop()
+        }
+
+        @Test func unparseableOperationOverTheSocketIsAnError() async throws {
+            let server = try await startServer()
+            let client = try await connect(to: server)
+
+            try await client.send(["type": "subscribe", "id": "x", "payload": ["query": "{ currentUser {"]])
+            let message = try await withTimeout { try await client.receive() }
+            #expect(message["type"] == .string("error"))
+            #expect(message["id"] == .string("x"))
+            #expect(message["payload"].count == 1)
+
+            client.close()
+            try await server.stop()
+        }
+
+        @Test func reusingAnIDAfterCompleteStartsACleanSubscription() async throws {
+            let server = try await startServer()
+            let client = try await connect(to: server)
+
+            try await client.send([
+                "type": "subscribe",
+                "id": "a",
+                "payload": ["query": "subscription { orderStatusChanged { id } }"],
+            ])
+            try await withTimeout {
+                while await server.engine.activeSubscriptionCount() == 0 {
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+            }
+
+            // Complete "a" and reuse the id straight away, under an alias that tells the two apart.
+            try await client.send(["type": "complete", "id": "a"])
+            try await client.send([
+                "type": "subscribe",
+                "id": "a",
+                "payload": ["query": "subscription { changed: orderStatusChanged { id } }"],
+            ])
+
+            // Publish until the new subscription answers. The first thing said about the *new*
+            // operation must be its event — not a stale `complete` left over from the one it
+            // replaced. An event for the old operation (no alias) may legitimately arrive first
+            // if a publish lands before the server has processed the `complete`; skip those.
+            let publisher = Task {
+                while !Task.isCancelled {
+                    try await server.publish("orderStatusChanged", payload: ["id": "order-9"])
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+            }
+            let message = try await withTimeout {
+                while true {
+                    let candidate = try await client.receive()
+                    let isOldOperationEvent =
+                        candidate["type"] == .string("next")
+                        && candidate["payload"]["data"]["orderStatusChanged"] != .null
+                    if !isOldOperationEvent {
+                        return candidate
+                    }
+                }
+            }
+            publisher.cancel()
+            #expect(message["type"] == .string("next"))
+            #expect(message["id"] == .string("a"))
+            #expect(message["payload"]["data"]["changed"]["id"] == .string("order-9"))
+
+            // The server still tracks the new operation, so completing it ends it.
+            try await client.send(["type": "complete", "id": "a"])
+            try await withTimeout {
+                while await server.engine.activeSubscriptionCount() > 0 {
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+            }
+
+            client.close()
+            try await server.stop()
+        }
+
         @Test func subscriptionsFlowOverACustomSubscriptionPath() async throws {
             // Mirror a server that serves queries/mutations on /graphql but subscriptions on a
             // dedicated realtime path — the client should reach both without special-casing.

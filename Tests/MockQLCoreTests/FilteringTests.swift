@@ -252,6 +252,25 @@ private func ids(_ list: GraphQLValue) -> [String] {
         #expect(ids(response.data?["tags"] ?? .null) == ["t1", "t2", "t3"])
     }
 
+    @Test func resolverOnARootMutationFieldIsRejectedRatherThanIgnored() async throws {
+        // The handler produces a root mutation field's value and the executor passes it through,
+        // so a Resolve there would be accepted and never consulted.
+        let error = await #expect(throws: MockQLError.self) {
+            _ = try await MockQLEngine(
+                schema: .sdl(
+                    """
+                    type Query { a: Int }
+                    type Mutation { bump: Int }
+                    """
+                )
+            ) {
+                Mutation("bump") { _, _ in .int(1) }
+                Resolve("Mutation.bump") { _, _ in .int(99) }
+            }
+        }
+        #expect(error?.message.contains("targets a root Mutation field") == true)
+    }
+
     @Test func duplicateResolverForSameFieldIsRejected() async throws {
         await #expect(throws: MockQLError.self) {
             _ = try await makeEngine {
@@ -406,5 +425,141 @@ struct QueryDiagnosticsTests {
         let engine = try await MockQLEngine(schema: .sdl(filterSDL), seed: .yaml(filterSeed), diagnostics: true)
         let response = await engine.execute(GraphQLRequest(query: "{ tags { id } }"))
         #expect(response.responseValue["extensions"]["mockql"]["fields"]["Query.tags"]["seeded"].intValue == 3)
+    }
+}
+
+// A board whose cards are reachable three ways — a query, a mutation payload, and a subscription
+// event — so each test can assert that the same field behaves the same on all three.
+private let boardSDL = """
+    type Query { board: Board! }
+    type Mutation { touchBoard: Board! archive(status: String!): [Card!]! }
+    type Subscription { boardChanged: Board! }
+    type Board { id: ID! cards(status: String, minPoints: Int): [Card!]! summary: String! }
+    type Card { id: ID! status: String! points: Int! }
+    """
+
+private let boardSeed = """
+    version: 1
+    data:
+      Card:
+        - { id: c1, status: open, points: 1 }
+        - { id: c2, status: open, points: 5 }
+        - { id: c3, status: done, points: 8 }
+      Board:
+        - { id: b1, cards: [c1, c2, c3] }
+    roots:
+      board: b1
+    """
+
+private func makeBoardEngine(diagnostics: Bool = false) async throws -> MockQLEngine {
+    try await MockQLEngine(schema: .sdl(boardSDL), seed: .yaml(boardSeed), diagnostics: diagnostics) {
+        Filter("Board.cards") { card, arguments in
+            (card["points"].intValue ?? 0) >= (arguments["minPoints"].intValue ?? 0)
+        }
+        Resolve("Board.summary") { _, store in
+            .string("\(store.records(of: "Card").count) cards")
+        }
+        Mutation("touchBoard") { _, state in state["Board", id: "b1"] }
+        Mutation("archive") { input, state in
+            // Returns every card it touched, none of which still has the status asked for.
+            var touched: [GraphQLValue] = []
+            for id in ["c1", "c2", "c3"] where state["Card", id: id]["status"] == input["status"] {
+                state.update("Card", id: id) { $0["status"] = "archived" }
+                touched.append(.reference("Card", id: id))
+            }
+            return .list(touched)
+        }
+    }
+}
+
+@Suite struct HooksOutsideQueriesTests {
+    private let selection = "{ summary cards(minPoints: 5) { id } }"
+
+    @Test func mutationPayloadAppliesFilterAndResolveHooks() async throws {
+        let engine = try await makeBoardEngine()
+        let query = await engine.execute(GraphQLRequest(query: "{ board \(selection) }"))
+        let mutation = await engine.execute(GraphQLRequest(query: "mutation { touchBoard \(selection) }"))
+        #expect(mutation.errors.isEmpty)
+        #expect(ids(try #require(mutation.data?["touchBoard"]["cards"])) == ["c2", "c3"])
+        #expect(mutation.data?["touchBoard"]["summary"] == .string("3 cards"))
+        // The same field, the same answer, whichever operation reached it.
+        #expect(mutation.data?["touchBoard"] == query.data?["board"])
+    }
+
+    @Test func mutationPayloadAppliesTheArgumentConventionToNestedFields() async throws {
+        let engine = try await MockQLEngine(schema: .sdl(boardSDL), seed: .yaml(boardSeed)) {
+            Mutation("touchBoard") { _, state in state["Board", id: "b1"] }
+        }
+        let response = await engine.execute(
+            GraphQLRequest(query: #"mutation { touchBoard { cards(status: "done") { id } } }"#)
+        )
+        #expect(ids(try #require(response.data?["touchBoard"]["cards"])) == ["c3"])
+    }
+
+    @Test func mutationResultIsNotRefilteredByItsOwnArguments() async throws {
+        // `archive(status:)` names a scalar field on Card, but the handler's return value is
+        // the answer; filtering it by `status == "open"` after archiving would empty it.
+        let engine = try await makeBoardEngine()
+        let response = await engine.execute(
+            GraphQLRequest(query: #"mutation { archive(status: "open") { id status } }"#)
+        )
+        #expect(response.errors.isEmpty)
+        #expect(ids(try #require(response.data?["archive"])) == ["c1", "c2"])
+    }
+
+    @Test func mutationResponseCarriesDiagnosticsWhenEnabled() async throws {
+        let engine = try await makeBoardEngine(diagnostics: true)
+        let response = await engine.execute(GraphQLRequest(query: "mutation { touchBoard \(selection) }"))
+        let cards = try #require(response.extensions?["mockql"]["fields"]["Board.cards"])
+        #expect(cards["customFilter"] == .bool(true))
+        #expect(cards["seeded"] == .int(3))
+        #expect(cards["returned"] == .int(2))
+    }
+
+    @Test func subscriptionEventAppliesHooksAndCarriesDiagnostics() async throws {
+        let engine = try await makeBoardEngine(diagnostics: true)
+        let stream = try await engine.subscribe(
+            GraphQLRequest(query: "subscription { boardChanged \(selection) }")
+        )
+        try await engine.publish("boardChanged", payload: .reference("Board", id: "b1"))
+        var iterator = stream.makeAsyncIterator()
+        let event = try #require(await iterator.next())
+        #expect(event.errors.isEmpty)
+        #expect(ids(try #require(event.data?["boardChanged"]["cards"])) == ["c2", "c3"])
+        #expect(event.data?["boardChanged"]["summary"] == .string("3 cards"))
+        #expect(event.extensions?["mockql"]["fields"]["Board.cards"]["returned"] == .int(2))
+        await engine.shutdown()
+    }
+}
+
+@Suite struct NullBubblingTests {
+    private let sdl = """
+        type Query { cart: Cart }
+        type Cart { id: ID! items: [Item!]! }
+        type Item { id: ID! }
+        """
+
+    @Test func nullListElementIsReportedOnceAndNamesTheElement() async throws {
+        let engine = try await MockQLEngine(schema: .sdl(sdl)) {
+            Resolve("Cart.items") { _, _ in [["id": "i1"], .null] }
+        }
+        let response = await engine.execute(GraphQLRequest(query: "{ cart { items { id } } }"))
+        #expect(
+            response.errors.map(\.message)
+                == ["Cannot return null for non-nullable element 1 of list field 'Cart.items'"]
+        )
+        #expect(response.errors.first?.path == [.field("cart"), .field("items"), .index(1)])
+        // The null bubbles through `[Item!]!` to the nearest nullable position.
+        #expect(response.data == ["cart": .null])
+    }
+
+    @Test func danglingReferenceInANonNullPositionIsReportedOnce() async throws {
+        let engine = try await MockQLEngine(schema: .sdl(sdl)) {
+            Resolve("Cart.items") { _, _ in [.reference("Item", id: "gone")] }
+        }
+        let response = await engine.execute(GraphQLRequest(query: "{ cart { items { id } } }"))
+        #expect(response.errors.count == 1)
+        #expect(response.errors.first?.message.contains("Dangling reference") == true)
+        #expect(response.data == ["cart": .null])
     }
 }

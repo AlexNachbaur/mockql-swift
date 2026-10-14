@@ -5,6 +5,7 @@ public enum GraphQLPathSegment: Hashable, Sendable, CustomStringConvertible {
     /// An index into a list value.
     case index(Int)
 
+    /// The field name, or the index as decimal digits.
     public var description: String {
         switch self {
         case .field(let name): return name
@@ -38,6 +39,8 @@ public struct GraphQLError: Error, Hashable, Sendable, CustomStringConvertible {
         self.extensions = extensions
     }
 
+    /// The message, followed by the first source location and the response path when present —
+    /// for example `Unknown field 'emial' at 3:9 (path: currentUser.emial)`.
     public var description: String {
         var parts = [message]
         if let location = locations.first {
