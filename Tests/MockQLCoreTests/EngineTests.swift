@@ -385,6 +385,24 @@ private func makeShopEngine(
         #expect(response.errors.isEmpty)
         #expect(response.data?["products"]["edges"].count == 0)
     }
+
+    /// The other end of the range: a cursor naming Int.max used to overflow `index + 1` and
+    /// crash the process (found by the review hub on mockql-swift#13).
+    @Test func cursorAtTheEndOfIntsRangeYieldsAnEmptyPageInsteadOfCrashing() async throws {
+        let engine = try await makeShopEngine()
+        for cursor in ["cursor:\(Int.max)", "cursor:\(Int.min)"] {
+            let response = await engine.execute(
+                GraphQLRequest(query: #"{ products(after: "\#(cursor)", before: "\#(cursor)") { edges { cursor } } }"#)
+            )
+            #expect(response.errors.isEmpty, "\(cursor)")
+            #expect(response.data?["products"]["edges"].count == 0, "\(cursor)")
+        }
+        let afterMax = await engine.execute(
+            GraphQLRequest(
+                query: #"{ products(after: "cursor:\#(Int.max)") { pageInfo { hasNextPage hasPreviousPage } } }"#)
+        )
+        #expect(afterMax.data?["products"]["pageInfo"]["hasNextPage"] == .bool(false))
+    }
 }
 
 @Suite struct EngineMutationTests {

@@ -816,7 +816,9 @@ struct Executor {
         var start = 0
         var end = nodes.count
         if let after = arguments["after"].stringValue, let index = cursorIndex(after) {
-            start = min(max(index + 1, 0), nodes.count)
+            // Compared before adding: the cursor is client-supplied, so `index` can be Int.max,
+            // and `index + 1` would trap.
+            start = index >= nodes.count ? nodes.count : max(index + 1, 0)
         }
         if let before = arguments["before"].stringValue, let index = cursorIndex(before) {
             end = min(max(index, 0), nodes.count)

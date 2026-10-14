@@ -124,9 +124,10 @@ test passes against the mock and the feature fails in production.
   `Mutation` (or `Subscription`); and a mutation returning a connection honors its own
   `first`/`after`/`last`/`before`. A handler's return value is otherwise passed through as
   given — it is never re-filtered by the mutation's own arguments. (MQ-6)
-- **A cursor with a negative index crashed the process.** `after: "cursor:-9"` computed a
-  negative array index and trapped, taking the test host down with it. Cursors pointing outside
-  the list now clamp to it and yield an empty page.
+- **A cursor outside `Int`'s safe range crashed the process.** `after: "cursor:-9"` computed a
+  negative array index, and `after: "cursor:9223372036854775807"` overflowed computing the next
+  index; both trapped, taking the test host down with it. Cursors pointing outside the list now
+  clamp to it and yield an empty page.
 - **WebSocket: `complete` followed `error`; a reused id could be evicted; split characters were
   corrupted.** `error` is terminal in `graphql-transport-ws`, but a `complete` was sent after it.
   When a client completed an operation and immediately reused its id, the finished operation's
